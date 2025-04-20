@@ -151,12 +151,16 @@ func main() {
 
 		// TTL in cm is always 0, this seems to be a bug in golang net package
 		// 打印调试信息：IP包
-		ifi, _ := net.InterfaceByIndex(cm.IfIndex)
-		fmt.Printf("Recv from interface: %s:  %s ==> %s, bytes: %d\n",
-			ifi.Name, cm.Src, cm.Dst, pktSize)
+		// ifi, _ := net.InterfaceByIndex(cm.IfIndex)
+		// fmt.Printf("Recv from interface: %s:  %s ==> %s, bytes: %d\n",
+		// 	ifi.Name, cm.Src, cm.Dst, pktSize)
 
 		// 你可以在这里进行 forwardDartPacket()
-		forwardDartPacket(cm.IfIndex, dartPkt, pktSize)
+		// 使用goroutine并发处理数据包
+		go func(cm ipv4.ControlMessage, dartPkt []byte, pktSize int) {
+			forwardDartPacket(cm.IfIndex, dartPkt, pktSize)
+		}(*cm, dartPkt, pktSize)
+
 	}
 }
 
@@ -258,14 +262,7 @@ func sendRawIPPacket(ifaceName string, packet []byte, dstIP net.IP) error {
 		return fmt.Errorf("setsockopt IP_HDRINCL: %v", err)
 	}
 
-	// 获取目标接口索引
-	iface, err := net.InterfaceByName(ifaceName)
-	if err != nil {
-		return fmt.Errorf("get interface: %v", err)
-	}
-
 	// 绑定到目标接口
-	ifaceNameBytes := append([]byte(ifaceName), 0)
 	if err := syscall.SetsockoptString(sock, syscall.SOL_SOCKET, syscall.SO_BINDTODEVICE, ifaceName); err != nil {
 		return fmt.Errorf("bind to device: %v", err)
 	}
@@ -324,7 +321,6 @@ func forwardDartPacket(iface int, dartPkt []byte, dartPktLen int) error {
 		targetIface = &globalUplinkConfig
 	}
 
-	// TODO: DEBUG HERE
 	// 根据targetIface中的DNS SERVER, 查询DstFQDN的IP地址
 	var ipHeader = IPHeader{}
 	ipHeader.DestIP = queryDNS(string(dartHeader.DstFqdn))
@@ -396,7 +392,13 @@ func calculateChecksum(header IPHeader) uint16 {
 }
 
 // queryDNS resolves a domain name to an IP address using the provided DNS servers.
+var dnsCache = make(map[string][4]byte)
+
 func queryDNS(domain string) [4]byte {
+	if ip, ok := dnsCache[domain]; ok {
+		return ip
+	}
+
 	var resolvedIP [4]byte
 	resolver := net.Resolver{
 		PreferGo: true,
@@ -413,5 +415,6 @@ func queryDNS(domain string) [4]byte {
 	}
 
 	copy(resolvedIP[:], ips[0].IP.To4())
+	dnsCache[domain] = resolvedIP
 	return resolvedIP
 }
