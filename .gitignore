@@ -1,0 +1,14 @@
+# Ignore binary files
+dart_forwarder
+
+# Ignore pcap files
+*.pcap
+*.db
+
+# Ignore Lingma cache
+.lingma
+
+# Ignore VSCode settings
+__*
+bin/
+go/

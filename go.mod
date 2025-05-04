@@ -5,6 +5,8 @@ go 1.23.0
 toolchain go1.23.8
 
 require (
+	github.com/krolaw/dhcp4 v0.0.0-20190909130307-a50d88189771 // indirect
+	github.com/mattn/go-sqlite3 v1.14.28 // indirect
 	golang.org/x/net v0.39.0 // indirect
 	golang.org/x/sys v0.32.0 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
