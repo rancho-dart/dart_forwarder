@@ -35,6 +35,7 @@ func main() {
 		CREATE TABLE IF NOT EXISTS dhcp_leases (
 			mac_address TEXT PRIMARY KEY,
 			ip_address TEXT,
+			fqdn TEXT,
 			dart_version INTEGER,
 			Expiry TEXT
 		)

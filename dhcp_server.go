@@ -25,14 +25,17 @@ type DHCPServer struct {
 	startIP       net.IP
 	endIP         net.IP
 	leaseDuration time.Duration
-	leases        map[string]leaseInfo // key: IP string
-	staticLeases  map[string]string    // key: MAC, value: IP
+	leasesByIp    map[string]leaseInfo // key: IP string
+	leasesByFQDN  map[string]leaseInfo
+	staticLeases  map[string]string // key: MAC, value: IP
 }
 
 type leaseInfo struct {
+	IP          net.IP
 	MAC         string
 	Expiry      time.Time
 	DARTVersion int
+	FQDN        string // 新增字段：完全限定域名
 }
 
 func Uint32ToIP(ipUint uint32) net.IP {
@@ -49,6 +52,8 @@ func IPToUint32(ip net.IP) uint32 {
 	return binary.BigEndian.Uint32(ipBytes)
 }
 
+var dhcpServers map[string]*DHCPServer = make(map[string]*DHCPServer)
+
 func startDHCPServerModule() {
 	// 遍历globalConfig中的接口，启动DHCP服务
 
@@ -61,6 +66,8 @@ func startDHCPServerModule() {
 				log.Printf("Error creating UDP listener for %s: %v", iface.Name, err)
 				continue
 			}
+			dhcpServers[iface.Name] = server
+
 			go func(pc net.PacketConn, server *DHCPServer) {
 				fmt.Printf("DHCP server started on %s...\n", server.ifConfig.Name)
 				log.Fatal(dhcp4.Serve(pc, server))
@@ -107,18 +114,19 @@ func NewDHCPServer(ifCfg InterfaceConfig) *DHCPServer {
 	}
 
 	// 从数据库中加载租约信息
-	var leases = make(map[string]leaseInfo)
+	var leasesByIp = make(map[string]leaseInfo)
+	var leasesByFQDN = make(map[string]leaseInfo)
 	if ifCfg.AddressPool != "" {
-		rows, err := db.Query("SELECT mac_address, ip_address, dart_version, Expiry FROM dhcp_leases")
+		rows, err := db.Query("SELECT mac_address, ip_address, fqdn, dart_version, Expiry FROM dhcp_leases")
 		if err != nil {
 			log.Printf("Error reading from SQLite database: %v\n", err)
 		}
 		defer rows.Close()
 
 		for rows.Next() {
-			var mac, ip, expiryStr string
+			var mac, ip, expiryStr, fqdn string
 			var dartVersion int
-			err := rows.Scan(&mac, &ip, &dartVersion, &expiryStr)
+			err := rows.Scan(&mac, &ip, &fqdn, &dartVersion, &expiryStr)
 			if err != nil {
 				log.Printf("Error scanning row: %v\n", err)
 				continue
@@ -128,10 +136,19 @@ func NewDHCPServer(ifCfg InterfaceConfig) *DHCPServer {
 				log.Printf("Error parsing expiry time: %v\n", err)
 				continue
 			}
-			leases[ip] = leaseInfo{
+			leasesByIp[ip] = leaseInfo{
+				IP:          net.ParseIP(ip).To4(),
 				MAC:         mac,
 				Expiry:      expiry,
 				DARTVersion: dartVersion,
+				FQDN:        fqdn,
+			}
+			leasesByFQDN[fqdn] = leaseInfo{
+				IP:          net.ParseIP(ip).To4(),
+				MAC:         mac,
+				Expiry:      expiry,
+				DARTVersion: dartVersion,
+				FQDN:        fqdn,
 			}
 		}
 	}
@@ -142,7 +159,8 @@ func NewDHCPServer(ifCfg InterfaceConfig) *DHCPServer {
 		startIP:       startIP,
 		endIP:         endIP,
 		leaseDuration: 24 * time.Hour, // 默认租约24小时
-		leases:        leases,
+		leasesByIp:    leasesByIp,
+		leasesByFQDN:  leasesByFQDN,
 		staticLeases:  staticLeases,
 	}
 }
@@ -183,7 +201,6 @@ func (s *DHCPServer) ServeDHCP(p dhcp4.Packet, msgType dhcp4.MessageType, option
 		}
 		return dhcp4.ReplyPacket(p, dhcp4.Offer, net.ParseIP(s.ifConfig.Gateway).To4(), ip, s.leaseDuration,
 			s.options.SelectOrderOrAll(options[dhcp4.OptionParameterRequestList]))
-
 	case dhcp4.Request:
 		// 检查是否是发给我们的请求
 		if server, ok := options[dhcp4.OptionServerIdentifier]; ok && !net.IP(server).Equal(net.ParseIP(s.ifConfig.Gateway).To4()) {
@@ -216,15 +233,35 @@ func (s *DHCPServer) ServeDHCP(p dhcp4.Packet, msgType dhcp4.MessageType, option
 					}
 				}
 
-				s.leases[reqIP.String()] = leaseInfo{
+				// 新增：获取FQDN
+				hostname := ""
+				if fqdnBin, ok := options[dhcp4.OptionHostName]; ok {
+					hostname = string(fqdnBin)
+				}
+
+				domain := s.ifConfig.Domain
+
+				fqdn := hostname + "." + domain
+
+				s.leasesByIp[reqIP.String()] = leaseInfo{
+					IP:          reqIP,
 					MAC:         mac,
 					Expiry:      time.Now().Add(s.leaseDuration),
 					DARTVersion: dartVersion,
+					FQDN:        fqdn,
+				}
+
+				s.leasesByFQDN[fqdn] = leaseInfo{
+					IP:          reqIP,
+					MAC:         mac,
+					Expiry:      time.Now().Add(s.leaseDuration),
+					DARTVersion: dartVersion,
+					FQDN:        fqdn,
 				}
 
 				// write to db
-				_, err := db.Exec("INSERT OR REPLACE INTO dhcp_leases (mac_address, ip_address, dart_version, Expiry) VALUES (?, ?, ?, ?)",
-					mac, reqIP.String(), dartVersion, time.Now().Add(s.leaseDuration).Format(time.RFC3339))
+				_, err := db.Exec("INSERT OR REPLACE INTO dhcp_leases (mac_address, ip_address, dart_version, fqdn, Expiry) VALUES (?, ?, ?, ?, ?)",
+					mac, reqIP.String(), dartVersion, fqdn, time.Now().Add(s.leaseDuration).Format(time.RFC3339))
 				if err != nil {
 					log.Printf("Error writing to SQLite database: %v\n", err)
 				}
@@ -236,9 +273,9 @@ func (s *DHCPServer) ServeDHCP(p dhcp4.Packet, msgType dhcp4.MessageType, option
 
 	case dhcp4.Release, dhcp4.Decline:
 		// 释放租约
-		for ip, li := range s.leases {
+		for ip, li := range s.leasesByIp {
 			if li.MAC == mac {
-				delete(s.leases, ip)
+				delete(s.leasesByIp, ip)
 				break
 			}
 		}
@@ -250,9 +287,9 @@ func (s *DHCPServer) findFreeIP(mac string) net.IP {
 	now := time.Now()
 
 	// 检查已分配的IP是否过期
-	for ip, li := range s.leases {
+	for ip, li := range s.leasesByIp {
 		if li.Expiry.Before(now) {
-			delete(s.leases, ip)
+			delete(s.leasesByIp, ip)
 		}
 	}
 
@@ -268,8 +305,8 @@ func (s *DHCPServer) findFreeIP(mac string) net.IP {
 		ipStr := ip.String()
 
 		// 检查是否已被分配
-		if li, ok := s.leases[ipStr]; !ok || li.Expiry.Before(now) {
-			s.leases[ipStr] = leaseInfo{
+		if li, ok := s.leasesByIp[ipStr]; !ok || li.Expiry.Before(now) {
+			s.leasesByIp[ipStr] = leaseInfo{
 				MAC:    mac,
 				Expiry: time.Now().Add(s.leaseDuration),
 			}

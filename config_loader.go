@@ -54,6 +54,14 @@ func loadConfig() (*Config, *InterfaceConfig, error) {
 			uploadLink = &config.Interfaces[i]
 		}
 
+		// 将接口域名统一为小写
+		config.Interfaces[i].Domain = strings.ToLower(config.Interfaces[i].Domain)
+
+		// check if interface[i].domain ends with '.'. If not, add it.
+		if !strings.HasSuffix(config.Interfaces[i].Domain, ".") {
+			config.Interfaces[i].Domain += "."
+		}
+
 		ifObj, err := net.InterfaceByName(config.Interfaces[i].Name)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to get interface by name: %v", err)
@@ -116,6 +124,15 @@ func loadConfig() (*Config, *InterfaceConfig, error) {
 
 	if uploadLink == nil {
 		return nil, nil, fmt.Errorf("failed to find uplink interface")
+	}
+
+	// 检查接口域名。downlink接口域名必须是uplink接口的子域
+	for i := range config.Interfaces {
+		if config.Interfaces[i].Direction == "downlink" {
+			if !strings.HasSuffix(config.Interfaces[i].Domain, uploadLink.Domain) {
+				return nil, nil, fmt.Errorf("downlink interface %s domain must be a subdomain of uplink interface %s domain", config.Interfaces[i].Name, uploadLink.Name)
+			}
+		}
 	}
 
 	return &config, uploadLink, nil

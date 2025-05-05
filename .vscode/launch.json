@@ -7,11 +7,12 @@
             "request": "launch",
             "mode": "debug",
             "program": "${workspaceFolder}",
+            "dlvFlags": ["--log-output="],  
             "env": {
                 "GOPATH": "${workspaceFolder}/go"
             },
             "args": [],
-            "showLog": true
+            "showLog": false
         }
     ]
 }
