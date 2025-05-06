@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"time"
 
 	_ "github.com/mattn/go-sqlite3" // 添加 SQLite 驱动的导入
 )
@@ -53,6 +54,7 @@ func main() {
 		startForwardModule()
 	}()
 
+	time.Sleep(1 * time.Second)
 	// 启动 DHCP Server 模块
 	wg.Add(1)
 	go func() {
@@ -60,6 +62,7 @@ func main() {
 		startDHCPServerModule()
 	}()
 
+	time.Sleep(1 * time.Second)
 	// 启动 DNS Server 模块
 	wg.Add(1)
 	go func() {

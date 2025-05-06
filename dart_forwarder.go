@@ -13,14 +13,6 @@ import (
 	"golang.org/x/net/ipv4"
 )
 
-const (
-	BufferSize = 65536
-	// EthPIP      = 0x0800
-	IpProtoDART = 17     // DART 现在使用 UDP 协议
-	DARTPort    = 0xDA27 // DART 使用的端口号
-	ConfigFile  = "config.yaml"
-)
-
 type EthernetHeader struct {
 	DestMAC   [6]byte
 	SourceMAC [6]byte
@@ -56,7 +48,7 @@ type DARTHeader struct {
 	SrcFqdn    []byte
 }
 
-func startForwardModule() {
+func startForwardModule_old() {
 	// 侦听DART数据包并转发
 	conn, err := net.ListenPacket("udp4", fmt.Sprintf(":%d", DARTPort))
 	if err != nil {
