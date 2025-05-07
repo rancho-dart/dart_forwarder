@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"net"
 	"strings"
 	"time"
@@ -12,6 +13,82 @@ import (
 // DNSServer 结构体，用于管理 DNS 服务
 type DNSServer struct {
 	ports []int
+}
+
+// resolveARecord 递归解析 CNAME 链，直到得到最终的 A 记录
+func resolveARecord(domain, dnsServer string, depth int) ([]net.IP, error) {
+	if depth > 10 {
+		return nil, fmt.Errorf("CNAME 链太长，疑似死循环")
+	}
+
+	c := new(dns.Client)
+	c.Timeout = 3 * time.Second
+
+	m := new(dns.Msg)
+	m.SetQuestion(dns.Fqdn(domain), dns.TypeA)
+	m.RecursionDesired = true
+
+	resp, _, err := c.Exchange(m, dnsServer)
+	if err != nil {
+		return nil, err
+	}
+
+	var aRecords []net.IP
+	for _, ans := range resp.Answer {
+		switch rr := ans.(type) {
+		case *dns.A:
+			aRecords = append(aRecords, rr.A)
+		case *dns.CNAME:
+			// 递归查询 CNAME 的目标
+			return resolveARecord(rr.Target, dnsServer, depth+1)
+		}
+	}
+
+	if len(aRecords) == 0 {
+		return nil, fmt.Errorf("no A records found")
+	}
+	return aRecords, nil
+}
+
+func (s *DNSServer) resolve(fqdn []byte) (outIfce *InterfaceConfig, ip net.IP, supportDart bool) {
+	outIfce = s.findLongestMatchingInterface(string(fqdn))
+
+	if outIfce == nil {
+		return nil, nil, false
+	}
+
+	switch outIfce.Direction {
+	case "uplink":
+		// 从outIfce.DNSServers指定的DNS服务器中选择一个，发送DNS QUERY解析fqdn的A记录
+		for _, dnsServer := range outIfce.DNSServers {
+			IPAddresses, err := resolveARecord(string(fqdn), dnsServer, 0)
+			if err != nil {
+				log.Printf("Error resolving A record for %s: %v\n", string(fqdn), err)
+				continue
+			} else if len(IPAddresses) == 0 {
+				log.Printf("No A records found for %s\n", string(fqdn))
+				return outIfce, nil, false
+			} else {
+				return outIfce, IPAddresses[0], true
+			}
+		}
+
+	case "downlink":
+		dhcpServer, ok := dhcpServers[outIfce.Name]
+		if !ok {
+			return nil, nil, false
+		}
+
+		lease, ok := dhcpServer.leasesByFQDN[string(fqdn)]
+		if !ok {
+			return nil, nil, false
+		}
+
+		ip = lease.IP
+		supportDart = lease.DARTVersion > 0
+		return
+	}
+	return nil, nil, false
 }
 
 // NewDNSServer 创建一个新的 DNS Server 实例
@@ -127,7 +204,7 @@ func (s *DNSServer) findLongestMatchingInterface(domain string) *InterfaceConfig
 }
 
 func (s *DNSServer) respondWithPseudoIp(w dns.ResponseWriter, r *dns.Msg, domain string) {
-	pseudoIp := globalPseudoIpPool.Allocate(domain, nil) // 当前我们还没有真实IP，暂时传入nil
+	pseudoIp := globalPseudoIpPool.FindOrAllocate(domain, nil) // 当前我们还没有真实IP，暂时传入nil
 
 	if pseudoIp == nil {
 		s.respondWithServerFailure(w, r)
@@ -256,14 +333,11 @@ func (s *DNSServer) respondWithDHCP(w dns.ResponseWriter, dnsMsg *dns.Msg, ifNam
 
 // startDNSServerModule 启动 DNS Server 模块
 var globalPseudoIpPool *PseudoIpPool
+var dnsServer = NewDNSServer([]int{53})
 
 func startDNSServerModule() {
 	globalPseudoIpPool = NewPseudoIpPool(time.Hour)
 
-	// 从全局配置中获取端口和接口信息
-	ports := []int{53} // 默认使用53端口
-
 	// 创建并启动 DNS Server
-	dnsServer := NewDNSServer(ports)
 	dnsServer.Start()
 }

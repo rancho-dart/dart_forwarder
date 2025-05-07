@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	DartLayerTypeID = 0xDA27
+	DartLayerTypeID = 1000 // 用来注册到gopacket，应用内唯一即可
 	BufferSize      = 65536
 	IpProtoDART     = 17 // DART 现在使用 UDP 协议
 	DNSPort         = 53
@@ -17,21 +17,8 @@ const (
 	ConfigFile      = "config.yaml"
 )
 
-// type ProtocolType uint8
-
-// func (d ProtocolType) String() string {
-//     names := map[ProtocolType]string{
-//         1: "ICMP",
-// 		2: "TCP",
-// 		3: "UDP",
-//     }
-//     if name, ok := names[d]; ok {
-//         return name
-//     }
-//     return fmt.Sprintf("Unknown(%d)", d)
-// }
-
-type DartProtocol struct {
+type DART struct {
+	layers.BaseLayer
 	Version    uint8
 	Protocol   layers.IPProtocol
 	DstFqdnLen uint8
@@ -42,37 +29,101 @@ type DartProtocol struct {
 }
 
 // 实现 gopacket.Layer 接口
-func (m *DartProtocol) LayerType() gopacket.LayerType {
-	return gopacket.LayerType(DartLayerTypeID) // 自定义 LayerType ID
-}
-func (m *DartProtocol) LayerContents() []byte { return m.Payload }
-func (m *DartProtocol) LayerPayload() []byte  { return nil }
+func (dart *DART) SerializeTo(b gopacket.SerializeBuffer, opts gopacket.SerializeOptions) error {
+	// 计算总长度
+	totalLength := 4 + len(dart.DstFqdn) + len(dart.SrcFqdn) + len(dart.Payload)
 
-var DartProtocolType = gopacket.RegisterLayerType(
+	// 分配缓冲区
+	buf, err := b.PrependBytes(totalLength)
+	if err != nil {
+		return err
+	}
+
+	// 填充字段
+	buf[0] = dart.Version
+	buf[1] = byte(dart.Protocol)
+	buf[2] = dart.DstFqdnLen
+	buf[3] = dart.SrcFqdnLen
+
+	// 填充 DstFqdn
+	copy(buf[4:4+len(dart.DstFqdn)], dart.DstFqdn)
+
+	// 填充 SrcFqdn
+	copy(buf[4+len(dart.DstFqdn):4+len(dart.DstFqdn)+len(dart.SrcFqdn)], dart.SrcFqdn)
+
+	// 填充 Payload
+	copy(buf[4+len(dart.DstFqdn)+len(dart.SrcFqdn):], dart.Payload)
+
+	return nil
+}
+
+func (dart *DART) NextLayerType() gopacket.LayerType {
+	return dart.Protocol.LayerType()
+}
+
+var EndpointDART = gopacket.RegisterEndpointType(1, gopacket.EndpointTypeMetadata{Name: "DART", Formatter: func(b []byte) string {
+	return string(b)
+}})
+
+// // 如果设置了此函数，那么此层可以被设置为网络层。但gopacket不接受两个网络层，也就是说此层会覆盖IP层
+// func (dart *DART) NetworkFlow() gopacket.Flow {
+// 	return gopacket.NewFlow(EndpointDART, dart.SrcFqdn, dart.DstFqdn)
+// }
+
+func (dart *DART) DecodeFromBytes(data []byte, df gopacket.DecodeFeedback) error {
+	if len(data) < 4 { // 检查最小长度
+		df.SetTruncated()
+		return fmt.Errorf("dart protocol packet too short")
+	}
+	dart.Version = data[0]
+	dart.Protocol = layers.IPProtocol(data[1])
+	dart.DstFqdnLen = data[2]
+	dart.SrcFqdnLen = data[3]
+
+	// 可能有报文因为UDP端口相同被误认为是DART报文。这里做一个简单的合法性检查
+	if dart.Version != 1 {
+		return fmt.Errorf("unsupported dart protocol version")
+	}
+
+	if dart.Protocol != layers.IPProtocolICMPv4 &&
+		dart.Protocol != layers.IPProtocolUDP &&
+		dart.Protocol != layers.IPProtocolTCP {
+		return fmt.Errorf("unsupported dart protocol protocol")
+	}
+
+	if len(data) < int(dart.DstFqdnLen)+int(dart.SrcFqdnLen)+4 {
+		return fmt.Errorf("illigal dart packet")
+	}
+
+	dart.DstFqdn = data[4 : 4+dart.DstFqdnLen]
+	dart.SrcFqdn = data[4+dart.DstFqdnLen : 4+dart.DstFqdnLen+dart.SrcFqdnLen]
+	dart.Payload = data[4+dart.DstFqdnLen+dart.SrcFqdnLen:]
+
+	return nil
+}
+
+func (dart *DART) LayerType() gopacket.LayerType {
+	return LayerTypeDART
+}
+
+var LayerTypeDART = gopacket.RegisterLayerType(
 	DartLayerTypeID,
 	gopacket.LayerTypeMetadata{
-		Name:    "DartProtocol",
-		Decoder: gopacket.DecodeFunc(decodeDartProtocol),
+		Name:    "DART",
+		Decoder: gopacket.DecodeFunc(decodeDART),
 	},
 )
 
-func decodeDartProtocol(data []byte, p gopacket.PacketBuilder) error {
-	if len(data) < 4 { // 检查最小长度
-		return fmt.Errorf("dart protocol packet too short")
+func (dart *DART) CanDecode() gopacket.LayerClass {
+	return LayerTypeDART
+}
+func decodeDART(data []byte, p gopacket.PacketBuilder) error {
+	dart := &DART{}
+	err := dart.DecodeFromBytes(data, p)
+	p.AddLayer(dart)
+	// p.SetNetworkLayer(dart)  // ChatGPT说不能将自己设置为网络层（会覆盖IP层）
+	if err != nil {
+		return err
 	}
-
-	DstFqdnLen := data[2]
-	SrcFqdnLen := data[3]
-
-	custom := &DartProtocol{
-		Version:    data[0],
-		Protocol:   layers.IPProtocol(data[1]),
-		DstFqdnLen: DstFqdnLen,
-		SrcFqdnLen: SrcFqdnLen,
-		DstFqdn:    data[4 : 4+DstFqdnLen],
-		SrcFqdn:    data[4+DstFqdnLen : 4+DstFqdnLen+SrcFqdnLen],
-		Payload:    data[4+DstFqdnLen+SrcFqdnLen:],
-	}
-	p.AddLayer(custom)
-	return p.NextDecoder(gopacket.LayerTypePayload) // 继续解析上层
+	return p.NextDecoder(dart.NextLayerType())
 }

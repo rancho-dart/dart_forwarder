@@ -45,7 +45,7 @@ func NewPseudoIpPool(ttl time.Duration) *PseudoIpPool {
 }
 
 // 分配或返回已有伪地址，并刷新时间
-func (p *PseudoIpPool) Allocate(domain string, realIP net.IP) net.IP {
+func (p *PseudoIpPool) FindOrAllocate(domain string, realIP net.IP) net.IP {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
