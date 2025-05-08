@@ -62,7 +62,7 @@ func main() {
 		startDHCPServerModule()
 	}()
 
-	time.Sleep(1 * time.Second)
+	// time.Sleep(1 * time.Second)
 	// 启动 DNS Server 模块
 	wg.Add(1)
 	go func() {

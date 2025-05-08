@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"syscall"
 
 	"gopkg.in/yaml.v2"
 )
@@ -25,7 +26,8 @@ type InterfaceConfig struct {
 	StaticBindings []StaticBinding `yaml:"static_bindings,omitempty"` // 修改：添加 StaticBindings 字段
 	APStartIP      net.IP
 	APEndIP        net.IP
-	Index          int     //`yaml:"index,omitempty"`
+	Index          int //`yaml:"index,omitempty"`
+	sll            *syscall.SockaddrLinklayer
 	IPAddress      [4]byte //`yaml:"ip_address,omitempty"`
 }
 
@@ -67,6 +69,11 @@ func loadConfig() (*Config, *InterfaceConfig, error) {
 			return nil, nil, fmt.Errorf("failed to get interface by name: %v", err)
 		}
 		config.Interfaces[i].Index = ifObj.Index
+
+		config.Interfaces[i].sll = &syscall.SockaddrLinklayer{
+			Ifindex:  ifObj.Index, // 发送接口的 index，可以通过 net.InterfaceByName 获取
+			Protocol: htons(syscall.ETH_P_IP),
+		}
 
 		addrs, err := ifObj.Addrs()
 		if err != nil {

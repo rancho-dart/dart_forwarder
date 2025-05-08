@@ -31,7 +31,7 @@ type DART struct {
 // 实现 gopacket.Layer 接口
 func (dart *DART) SerializeTo(b gopacket.SerializeBuffer, opts gopacket.SerializeOptions) error {
 	// 计算总长度
-	totalLength := 4 + len(dart.DstFqdn) + len(dart.SrcFqdn) + len(dart.Payload)
+	totalLength := 4 + len(dart.DstFqdn) + len(dart.SrcFqdn) // + len(dart.Payload)
 
 	// 分配缓冲区
 	buf, err := b.PrependBytes(totalLength)
@@ -52,7 +52,7 @@ func (dart *DART) SerializeTo(b gopacket.SerializeBuffer, opts gopacket.Serializ
 	copy(buf[4+len(dart.DstFqdn):4+len(dart.DstFqdn)+len(dart.SrcFqdn)], dart.SrcFqdn)
 
 	// 填充 Payload
-	copy(buf[4+len(dart.DstFqdn)+len(dart.SrcFqdn):], dart.Payload)
+	// copy(buf[4+len(dart.DstFqdn)+len(dart.SrcFqdn):], dart.Payload) //只填充DART报头就好，Payload不需要填
 
 	return nil
 }
@@ -61,7 +61,7 @@ func (dart *DART) NextLayerType() gopacket.LayerType {
 	return dart.Protocol.LayerType()
 }
 
-var EndpointDART = gopacket.RegisterEndpointType(1, gopacket.EndpointTypeMetadata{Name: "DART", Formatter: func(b []byte) string {
+var EndpointDART = gopacket.RegisterEndpointType(1000, gopacket.EndpointTypeMetadata{Name: "DART", Formatter: func(b []byte) string {
 	return string(b)
 }})
 
@@ -126,4 +126,8 @@ func decodeDART(data []byte, p gopacket.PacketBuilder) error {
 		return err
 	}
 	return p.NextDecoder(dart.NextLayerType())
+}
+
+func init() {
+	layers.RegisterUDPPortLayerType(DARTPort, LayerTypeDART)
 }

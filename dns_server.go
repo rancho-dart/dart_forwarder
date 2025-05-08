@@ -51,7 +51,12 @@ func resolveARecord(domain, dnsServer string, depth int) ([]net.IP, error) {
 }
 
 func (s *DNSServer) resolve(fqdn []byte) (outIfce *InterfaceConfig, ip net.IP, supportDart bool) {
-	outIfce = s.findLongestMatchingInterface(string(fqdn))
+	domain := string(fqdn)
+	if !strings.HasSuffix(domain, ".") {
+		domain += "."
+	}
+
+	outIfce = s.findLongestMatchingInterface(domain)
 
 	if outIfce == nil {
 		return nil, nil, false
@@ -61,12 +66,12 @@ func (s *DNSServer) resolve(fqdn []byte) (outIfce *InterfaceConfig, ip net.IP, s
 	case "uplink":
 		// 从outIfce.DNSServers指定的DNS服务器中选择一个，发送DNS QUERY解析fqdn的A记录
 		for _, dnsServer := range outIfce.DNSServers {
-			IPAddresses, err := resolveARecord(string(fqdn), dnsServer, 0)
+			IPAddresses, err := resolveARecord(domain, dnsServer, 0)
 			if err != nil {
-				log.Printf("Error resolving A record for %s: %v\n", string(fqdn), err)
+				log.Printf("Error resolving A record for %s: %v\n", domain, err)
 				continue
 			} else if len(IPAddresses) == 0 {
-				log.Printf("No A records found for %s\n", string(fqdn))
+				log.Printf("No A records found for %s\n", domain)
 				return outIfce, nil, false
 			} else {
 				return outIfce, IPAddresses[0], true
@@ -79,7 +84,7 @@ func (s *DNSServer) resolve(fqdn []byte) (outIfce *InterfaceConfig, ip net.IP, s
 			return nil, nil, false
 		}
 
-		lease, ok := dhcpServer.leasesByFQDN[string(fqdn)]
+		lease, ok := dhcpServer.leasesByFQDN[domain]
 		if !ok {
 			return nil, nil, false
 		}
