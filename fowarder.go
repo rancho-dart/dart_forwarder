@@ -211,7 +211,7 @@ NextPacket:
 			dart := dartLayer.(*DART)
 			fmt.Printf("Received dart packet: %s -> %s\n", dart.SrcFqdn, dart.DstFqdn)
 
-			outIfce, destIp, supportDart := dnsServer.resolve(dart.DstFqdn)
+			outIfce, destIp, supportDart := dnsServer.resolve(string(dart.DstFqdn))
 			if outIfce == nil || destIp == nil {
 				// 没找到合适的转发接口或目标IP
 				packet.SetVerdict(netfilter.NF_DROP)
