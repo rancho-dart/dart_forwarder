@@ -18,6 +18,7 @@ type PseudoIpEntry struct {
 	Domain     string
 	PseudoIP   net.IP
 	RealIP     net.IP
+	udpPort    uint16 // 虽然我们在发送报文的时候会将源宿端口统一设置为0xDA27，但报文通过NAT网关后源端口号会发生变化，因此我们需要记录一下以便返回时有正确的端口
 	LastUsedAt time.Time
 }
 
@@ -45,7 +46,7 @@ func NewPseudoIpPool(ttl time.Duration) *PseudoIpPool {
 }
 
 // 分配或返回已有伪地址，并刷新时间
-func (p *PseudoIpPool) FindOrAllocate(domain string, realIP net.IP) net.IP {
+func (p *PseudoIpPool) FindOrAllocate(domain string, realIP net.IP, udpport uint16) net.IP {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
@@ -53,6 +54,7 @@ func (p *PseudoIpPool) FindOrAllocate(domain string, realIP net.IP) net.IP {
 	if entry, exists := p.domainMap[domain]; exists {
 		entry.LastUsedAt = time.Now()
 		entry.RealIP = realIP
+		entry.udpPort = udpport
 		return entry.PseudoIP
 	}
 
@@ -65,6 +67,7 @@ func (p *PseudoIpPool) FindOrAllocate(domain string, realIP net.IP) net.IP {
 				Domain:     domain,
 				PseudoIP:   pseudoIP,
 				RealIP:     realIP,
+				udpPort:    udpport,
 				LastUsedAt: time.Now(),
 			}
 			p.domainMap[domain] = entry
@@ -77,15 +80,20 @@ func (p *PseudoIpPool) FindOrAllocate(domain string, realIP net.IP) net.IP {
 }
 
 // 反查：伪地址 → 域名和真实地址
-func (p *PseudoIpPool) Lookup(ip net.IP) (domain string, realIP net.IP, ok bool) {
+func (p *PseudoIpPool) Lookup(ip net.IP) (domain string, realIP net.IP, udpPort uint16, ok bool) {
 	p.mutex.RLock()
 	defer p.mutex.RUnlock()
 
 	ipInt := ipToUint32(ip.To4())
 	if entry, found := p.ipMap[ipInt]; found {
-		return entry.Domain, entry.RealIP, true
+		return entry.Domain, entry.RealIP, entry.udpPort, true
 	}
-	return "", nil, false
+	return "", nil, 0, false
+}
+
+func (p *PseudoIpPool) IsPseudoIP(ip net.IP) bool {
+	ipInt := ipToUint32(ip.To4())
+	return p.start <= ipInt && ipInt <= p.end
 }
 
 // 清理过期项

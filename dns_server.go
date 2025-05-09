@@ -133,11 +133,11 @@ func (s *DNSServer) getForwardInfo(srcFQDN, destFQDN, inIfce string, srcIP, dest
 	// 这个函数是为路由转发程序准备的，用于获取转发信息，包括源和目标IP地址，源和目标FQDN，以及源IP地址对应的接口。
 	if destFQDN == "" { //这是不支持DART的子域主机发出的报文
 		// 这里的逻辑还没有全部完成。要根据目标主机是否支持DART决定转发策略
-		newDestFQDN, newDestIP, _ = globalPseudoIpPool.Lookup(srcIP)
-		inIfceCfg := dhcpServers[inIfce].ifConfig
-		newSrcFQDN = inIfceCfg.Domain
-		newSrcIP = net.IP(inIfceCfg.IPAddress[:])
-		outIfce = inIfceCfg.Name
+		// newDestFQDN, newDestIP, newDestUdpPort, _ = globalPseudoIpPool.Lookup(srcIP)
+		// inIfceCfg := dhcpServers[inIfce].ifConfig
+		// newSrcFQDN = inIfceCfg.Domain
+		// newSrcIP = net.IP(inIfceCfg.IPAddress[:])
+		// outIfce = inIfceCfg.Name
 		return
 	} else { //这是支持DART的主机发出的报文
 		// TODO: 获取DART报头信息，并解析出DstFqdn和SrcFqdn
@@ -209,7 +209,7 @@ func (s *DNSServer) findLongestMatchingInterface(domain string) *InterfaceConfig
 }
 
 func (s *DNSServer) respondWithPseudoIp(w dns.ResponseWriter, r *dns.Msg, domain string) {
-	pseudoIp := globalPseudoIpPool.FindOrAllocate(domain, nil) // 当前我们还没有真实IP，暂时传入nil
+	pseudoIp := globalPseudoIpPool.FindOrAllocate(domain, nil, 0) // 当前我们还没有真实IP，暂时传入nil
 
 	if pseudoIp == nil {
 		s.respondWithServerFailure(w, r)

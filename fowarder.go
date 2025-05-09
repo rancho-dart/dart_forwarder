@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"strconv"
+	"strings"
 	"syscall"
 
 	"github.com/AkihiroSuda/go-netfilter-queue"
@@ -59,19 +60,6 @@ func (fr *ForwardRoutine) SendPacket(ifce *InterfaceConfig, DstIP net.IP, packet
 	return syscall.Sendto(fr.sock, packet, 0, &addr)
 }
 
-func (fr *ForwardRoutine) processDownlinkForwardPackets() {
-	for packet := range fr.queue.GetPackets() {
-		ipLayer := packet.Packet.Layer(layers.LayerTypeIPv4)
-		if ipLayer != nil {
-			ip := ipLayer.(*layers.IPv4)
-			fmt.Printf("Received packet: %s -> %s\n", ip.SrcIP, ip.DstIP)
-		}
-
-		// 一定要给出 verdict，不然内核一直等着
-		packet.SetVerdict(netfilter.NF_ACCEPT)
-	}
-}
-
 func (fr *ForwardRoutine) processDownlinkInputPackets() {
 	for packet := range fr.queue.GetPackets() {
 		ipLayer := packet.Packet.Layer(layers.LayerTypeIPv4)
@@ -85,6 +73,100 @@ func (fr *ForwardRoutine) processDownlinkInputPackets() {
 	}
 }
 
+func (fr *ForwardRoutine) processDownlinkForwardPackets() {
+	// 这里处理来自downlink发往伪地址的报文。因为是发往伪地址，这些报文会进入FORWARD队列。报文的去向，必须是uplink方向（目前我们
+	// 只实现这个）。这些报文进来的时候没有DART封装，我们要根据伪地址查出目标主机的FQDN和真实IP（也没有那么真实，其实是上联接口所
+	// 在域中的地址），给报文加上DART报头，设置IP层头的DstIP为真实IP，然后转发给目标主机。
+NextPacket:
+	for packet := range fr.queue.GetPackets() {
+		for range 1 {
+
+			ipLayer := packet.Packet.Layer(layers.LayerTypeIPv4)
+			if ipLayer == nil {
+				break
+			}
+
+			ip := ipLayer.(*layers.IPv4)
+			if ip == nil {
+				break
+			}
+			fmt.Printf("Received packet: %s -> %s\n", ip.SrcIP, ip.DstIP)
+			// check whether the destip is pseudo ip
+			if !globalPseudoIpPool.IsPseudoIP(ip.DstIP) {
+				break
+			}
+
+			DstFqdn, DstIP, DstUdpPort, ok := globalPseudoIpPool.Lookup(ip.DstIP)
+			if !ok {
+				fmt.Printf("DstIP %s not found in pseudo ip pool\n", ip.DstIP)
+				continue NextPacket
+			}
+
+			DstFqdn = strings.TrimSuffix(DstFqdn, ".")
+
+			server, ok := dhcpServers[fr.ifce.Name]
+			if !ok || server == nil {
+				fmt.Printf("no DHCP server for interface %s\n", fr.ifce.Name)
+				continue NextPacket
+			}
+
+			lease, ok := server.leasesByIp[ip.SrcIP.String()]
+			if !ok {
+				fmt.Printf("no lease for IP %s\n", ip.SrcIP)
+				continue NextPacket
+			}
+
+			SrcFqdn := lease.FQDN
+
+			dart := &DART{
+				Version:    1,
+				Protocol:   ip.Protocol,
+				DstFqdnLen: uint8(len(DstFqdn)),
+				SrcFqdnLen: uint8(len(SrcFqdn)),
+				DstFqdn:    []byte(DstFqdn),
+				SrcFqdn:    []byte(SrcFqdn),
+				Payload:    ip.Payload,
+			}
+
+			udp := &layers.UDP{
+				SrcPort: layers.UDPPort(DARTPort),
+				DstPort: layers.UDPPort(DstUdpPort),
+				Length:  uint16(len(dart.Payload)) + uint16(dart.HeaderLen()) + 8, // UDP 头长度为 8 字节
+			}
+
+			ip.SrcIP = globalUplinkConfig.IPAddress[:]
+			ip.DstIP = DstIP
+			ip.Protocol = layers.IPProtocolUDP
+
+			udp.SetNetworkLayerForChecksum(ip)
+
+			buffer := gopacket.NewSerializeBuffer()
+			opts := gopacket.SerializeOptions{
+				FixLengths:       true,
+				ComputeChecksums: true,
+			}
+			err := gopacket.SerializeLayers(buffer, opts, ip, udp, dart, gopacket.Payload(dart.Payload))
+
+			if err != nil {
+				log.Printf("Failed to serialize packet: %v", err)
+				packet.SetVerdict(netfilter.NF_DROP)
+				continue NextPacket
+			}
+
+			hex_dump(buffer.Bytes())
+			if err := fr.SendPacket(&globalUplinkConfig, ip.DstIP, buffer.Bytes()); err != nil {
+				log.Printf("Failed to send packet: %v", err)
+			}
+
+			packet.SetVerdict(netfilter.NF_DROP)
+			continue NextPacket
+		} // Pseudo loop
+
+		// 上面的伪循环如果Break出来，就放行当前报文
+		packet.SetVerdict(netfilter.NF_ACCEPT)
+	} // Packet loop
+}
+
 func (fr *ForwardRoutine) processUplinkInputPackets() {
 	// 这里处理来自uplink的报文
 	// 从这个接口进来的报文，只有DART封装的需要转发，其他的都透明通过
@@ -95,7 +177,7 @@ func (fr *ForwardRoutine) processUplinkInputPackets() {
 NextPacket:
 	for packet := range fr.queue.GetPackets() {
 		for range 1 {
-			// Pseudo loop. if any packet which shoud pass though, break can jump to ACCEPT directly.
+			// Pseudo loop. if any packet which shoud pass though, 'break' can jump to ACCEPT directly.
 			// Otherwise SetVerdictWithPacket or Drop, and then continue NextPacket
 			ipLayer := packet.Packet.Layer(layers.LayerTypeIPv4)
 			if ipLayer == nil {
@@ -158,7 +240,7 @@ NextPacket:
 			} else { // dest host doesn't support DART
 				// 删除 DART 报头和UDP报头
 				ip.DstIP = destIp
-				ip.SrcIP = globalPseudoIpPool.FindOrAllocate(string(dart.SrcFqdn), ip.SrcIP)
+				ip.SrcIP = globalPseudoIpPool.FindOrAllocate(string(dart.SrcFqdn), ip.SrcIP, uint16(udp.SrcPort))
 				// ip.SrcIP = outIfce.IPAddress[:]
 				ip.Protocol = dart.Protocol
 
@@ -228,7 +310,7 @@ func hex_dump(data []byte) {
 						fmt.Printf(".")
 					}
 				}
-				fmt.Printf("|")
+				fmt.Printf("| ")
 			}
 			fmt.Printf("\n%04x: ", i)
 		}

@@ -29,6 +29,10 @@ type DART struct {
 }
 
 // 实现 gopacket.Layer 接口
+func (dart *DART) HeaderLen() uint8 {
+	return 4 + dart.DstFqdnLen + dart.SrcFqdnLen
+}
+
 func (dart *DART) SerializeTo(b gopacket.SerializeBuffer, opts gopacket.SerializeOptions) error {
 	// 计算总长度
 	totalLength := 4 + len(dart.DstFqdn) + len(dart.SrcFqdn) // + len(dart.Payload)
