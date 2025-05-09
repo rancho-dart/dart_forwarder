@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"strconv"
 	"syscall"
 
 	"github.com/AkihiroSuda/go-netfilter-queue"
@@ -184,9 +185,8 @@ NextPacket:
 				case layers.IPProtocolICMPv4:
 					if icmpLayer := packetData.Layer(layers.LayerTypeICMPv4); icmpLayer != nil {
 						icmp := icmpLayer.(*layers.ICMPv4)
-						icmp.Checksum = 0
 						err = gopacket.SerializeLayers(buffer, opts,
-							ip, icmp, gopacket.Payload(icmp.Payload))
+							ip, icmp, gopacket.Payload(icmp.Payload)) // 此函数会重新计算icmp的checksum
 					}
 				default:
 					err = errors.New("unsupported protocol in dart payload")
@@ -278,12 +278,10 @@ func createAndStartQueue(queueNo uint16, ifce InterfaceConfig, style QueueStyle)
 }
 
 func startForwardModule() {
+	rm := NewRuleManager()
+	go rm.CleanupOnSignal()
 
-	// layers.RegisterUDPPortLayerType(0xda27, LayerTypeDART)
-
-	fmt.Println("Creating queues to receive packets...")
-	fmt.Println("Remember to exec the following command to guide packets to the right queue:")
-	fmt.Println("  iptables -F     # clear all rules")
+	fmt.Println("Creating queues & iptable rules to capture packets...")
 
 	var queueNo uint16 = 0
 	for _, ifce := range globalConfig.Interfaces {
@@ -291,15 +289,22 @@ func startForwardModule() {
 		case "uplink":
 			// 创建并启动 uplink 队列
 			createAndStartQueue(queueNo, ifce, Input)
-			fmt.Printf("  iptables -A INPUT -i %s -p udp --dport 55847 -j NFQUEUE --queue-num %d\n", ifce.Name, queueNo)
+
+			if err := rm.AddRule("filter", "INPUT", []string{"-i", ifce.Name, "-p", "udp", "--dport", "55847", "-j", "NFQUEUE", "--queue-num", strconv.Itoa(int(queueNo))}); err != nil {
+				log.Fatalf("Failed to set iptables rule for uplink input: %v", err)
+			}
 			queueNo++
 		case "downlink":
 			createAndStartQueue(queueNo, ifce, Forward)
-			fmt.Printf("  iptables -A FORWARD -i %s -j NFQUEUE --queue-num %d\n", ifce.Name, queueNo)
+			if err := rm.AddRule("filter", "FORWARD", []string{"-i", ifce.Name, "-j", "NFQUEUE", "--queue-num", strconv.Itoa(int(queueNo))}); err != nil {
+				log.Fatalf("Failed to set iptables rule for downlink forward: %v", err)
+			}
 			queueNo++
 
 			createAndStartQueue(queueNo, ifce, Input)
-			fmt.Printf("  iptables -A INPUT -i %s -p udp --dport 55847 -j NFQUEUE --queue-num %d\n", ifce.Name, queueNo)
+			if err := rm.AddRule("filter", "INPUT", []string{"-i", ifce.Name, "-p", "udp", "--dport", "55847", "-j", "NFQUEUE", "--queue-num", strconv.Itoa(int(queueNo))}); err != nil {
+				log.Fatalf("Failed to set iptables rule for downlink input: %v", err)
+			}
 			queueNo++
 		default:
 			log.Printf("Unknown direction: %s", ifce.Direction)

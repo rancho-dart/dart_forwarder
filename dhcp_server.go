@@ -117,7 +117,7 @@ func NewDHCPServer(ifCfg InterfaceConfig) *DHCPServer {
 	var leasesByIp = make(map[string]leaseInfo)
 	var leasesByFQDN = make(map[string]leaseInfo)
 	if ifCfg.AddressPool != "" {
-		rows, err := db.Query("SELECT mac_address, ip_address, fqdn, dart_version, Expiry FROM dhcp_leases")
+		rows, err := globalDB.Query("SELECT mac_address, ip_address, fqdn, dart_version, Expiry FROM dhcp_leases")
 		if err != nil {
 			log.Printf("Error reading from SQLite database: %v\n", err)
 		}
@@ -260,7 +260,7 @@ func (s *DHCPServer) ServeDHCP(p dhcp4.Packet, msgType dhcp4.MessageType, option
 				}
 
 				// write to db
-				_, err := db.Exec("INSERT OR REPLACE INTO dhcp_leases (mac_address, ip_address, dart_version, fqdn, Expiry) VALUES (?, ?, ?, ?, ?)",
+				_, err := globalDB.Exec("INSERT OR REPLACE INTO dhcp_leases (mac_address, ip_address, dart_version, fqdn, Expiry) VALUES (?, ?, ?, ?, ?)",
 					mac, reqIP.String(), dartVersion, fqdn, time.Now().Add(s.leaseDuration).Format(time.RFC3339))
 				if err != nil {
 					log.Printf("Error writing to SQLite database: %v\n", err)

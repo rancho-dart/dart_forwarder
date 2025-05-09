@@ -12,6 +12,7 @@
                 "GOPATH": "${workspaceFolder}/go"
             },
             "args": [],
+            "postDebugTask": "cleanup-iptables",
             "showLog": false
         }
     ]

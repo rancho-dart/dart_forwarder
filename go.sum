@@ -1,5 +1,7 @@
 github.com/AkihiroSuda/go-netfilter-queue v0.0.0-20230310003200-24cd054ca0f8 h1:J4OIhG0Z/qIXyerbpzdBSQFMOxK+cVpnxFh055jQ1+8=
 github.com/AkihiroSuda/go-netfilter-queue v0.0.0-20230310003200-24cd054ca0f8/go.mod h1:Er0Qhtk1hQ7qvNIA4mRVc3I3HgVvCN8esgjVcBIl1yk=
+github.com/coreos/go-iptables v0.8.0 h1:MPc2P89IhuVpLI7ETL/2tx3XZ61VeICZjYqDEgNsPRc=
+github.com/coreos/go-iptables v0.8.0/go.mod h1:Qe8Bv2Xik5FyTXwgIbLAnv2sWSBmvWdFETJConOQ//Q=
 github.com/google/gopacket v1.1.19 h1:ves8RnFZPGiFnTS0uPQStjwru6uO6h+nlr9j6fL7kF8=
 github.com/google/gopacket v1.1.19/go.mod h1:iJ8V8n6KS+z2U1A8pUwu8bW5SyEMkXJB8Yo/Vo+TKTo=
 github.com/krolaw/dhcp4 v0.0.0-20190909130307-a50d88189771 h1:t2c2B9g1ZVhMYduqmANSEGVD3/1WlsrEYNPtVoFlENk=

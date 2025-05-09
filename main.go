@@ -10,7 +10,31 @@ import (
 	_ "github.com/mattn/go-sqlite3" // 添加 SQLite 驱动的导入
 )
 
-var db *sql.DB // 新增全局变量，用于存储数据库连接
+var globalDB *sql.DB // 新增全局变量，用于存储数据库连接
+
+func initDB() (*sql.DB, error) {
+	// 初始化数据库连接
+	db, errOpenDB := sql.Open("sqlite3", "./dhcp_leases.db")
+	if errOpenDB != nil {
+		return nil, errOpenDB
+	}
+
+	// 创建表以存储DHCP租赁信息
+	_, errCreateTbl := db.Exec(`
+			CREATE TABLE IF NOT EXISTS dhcp_leases (
+				mac_address TEXT PRIMARY KEY,
+				ip_address TEXT,
+				fqdn TEXT,
+				dart_version INTEGER,
+				Expiry TEXT
+			)
+		`)
+	if errCreateTbl != nil {
+		return nil, errCreateTbl
+	}
+
+	return db, nil
+}
 
 func main() {
 	// 初始化配置
@@ -22,39 +46,17 @@ func main() {
 	globalConfig = *cfg
 	globalUplinkConfig = *uplink
 
-	// 初始化数据库连接
 	var errDB error
-	db, errDB = sql.Open("sqlite3", "./dhcp_leases.db")
+	globalDB, errDB = initDB()
 	if errDB != nil {
-		fmt.Printf("Failed to open SQLite database: %v\n", errDB)
+		fmt.Printf("Error initializing database: %v\n", errDB)
 		os.Exit(1)
 	}
-	defer db.Close() // 程序退出时关闭数据库连接
-
-	// 创建表以存储DHCP租赁信息
-	_, errDB = db.Exec(`
-		CREATE TABLE IF NOT EXISTS dhcp_leases (
-			mac_address TEXT PRIMARY KEY,
-			ip_address TEXT,
-			fqdn TEXT,
-			dart_version INTEGER,
-			Expiry TEXT
-		)
-	`)
-	if errDB != nil {
-		fmt.Printf("Failed to create table: %v\n", errDB)
-		os.Exit(1)
-	}
+	defer globalDB.Close() // 程序退出时关闭数据库连接
 
 	// 启动 Forward 模块
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		startForwardModule()
-	}()
 
-	time.Sleep(1 * time.Second)
 	// 启动 DHCP Server 模块
 	wg.Add(1)
 	go func() {
@@ -68,6 +70,14 @@ func main() {
 	go func() {
 		defer wg.Done()
 		startDNSServerModule()
+	}()
+
+	time.Sleep(200 * time.Millisecond)
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		startForwardModule()
 	}()
 
 	// 等待所有模块完成
