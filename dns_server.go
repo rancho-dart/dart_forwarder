@@ -16,9 +16,9 @@ type DNSServer struct {
 }
 
 // resolveARecord 递归解析 CNAME 链，直到得到最终的 A 记录
-func resolveARecord(domain, dnsServer string, depth int) ([]net.IP, error) {
+func resolveARecord(domain, dnsServer string, depth int) ([]net.IP, bool, error) {
 	if depth > 10 {
-		return nil, fmt.Errorf("CNAME 链太长，疑似死循环")
+		return nil, false, fmt.Errorf("CNAME 链太长，疑似死循环")
 	}
 
 	c := new(dns.Client)
@@ -28,26 +28,59 @@ func resolveARecord(domain, dnsServer string, depth int) ([]net.IP, error) {
 	m.SetQuestion(dns.Fqdn(domain), dns.TypeA)
 	m.RecursionDesired = true
 
-	resp, _, err := c.Exchange(m, dnsServer)
+	resp, _, err := c.Exchange(m, dnsServer+":53")
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
+	var supportDart bool = false
 	var aRecords []net.IP
+	var lastCname string
+	var cnameChain = make(map[string]struct{}, 10)
+	cnameChain[domain] = struct{}{}
+
 	for _, ans := range resp.Answer {
+		// 如果cnameChain中不包含当前ans中的名称，则添加到cnameChain中
+		rrName := ans.Header().Name
+		if strings.HasPrefix(rrName, "dart-host.") || strings.HasPrefix(rrName, "dart-gateway.") {
+			supportDart = true
+		}
+
 		switch rr := ans.(type) {
 		case *dns.A:
 			aRecords = append(aRecords, rr.A)
 		case *dns.CNAME:
-			// 递归查询 CNAME 的目标
-			return resolveARecord(rr.Target, dnsServer, depth+1)
+			_, exists := cnameChain[rrName]
+			if !exists {
+				continue
+			}
+			lastCname = rr.Target
+			cnameChain[lastCname] = struct{}{} // Follow cname chain. if name in the chain, append cname to the chain
 		}
 	}
 
-	if len(aRecords) == 0 {
-		return nil, fmt.Errorf("no A records found")
+	if len(aRecords) > 0 {
+		return aRecords, supportDart, nil
+	} else if lastCname != "" {
+		return resolveARecord(lastCname, dnsServer, depth+1)
 	}
-	return aRecords, nil
+	return nil, false, nil
+}
+
+func (s *DNSServer) resolveFromOuterDNSServer(fqdn string) (ip net.IP, supportDart bool) {
+	for _, dnsServer := range globalUplinkConfig.DNSServers {
+		IPAddresses, supportDart, err := resolveARecord(fqdn, dnsServer, 0)
+		if err != nil {
+			log.Printf("Error resolving A record for %s: %v\n", fqdn, err)
+			continue
+		} else if len(IPAddresses) == 0 {
+			log.Printf("No A records found for %s\n", fqdn)
+			return nil, false
+		} else {
+			return IPAddresses[0], supportDart
+		}
+	}
+	return nil, false
 }
 
 func (s *DNSServer) resolve(fqdn string) (outIfce *InterfaceConfig, ip net.IP, supportDart bool) {
@@ -64,19 +97,8 @@ func (s *DNSServer) resolve(fqdn string) (outIfce *InterfaceConfig, ip net.IP, s
 	switch outIfce.Direction {
 	case "uplink":
 		// 从outIfce.DNSServers指定的DNS服务器中选择一个，发送DNS QUERY解析fqdn的A记录
-		for _, dnsServer := range outIfce.DNSServers {
-			IPAddresses, err := resolveARecord(fqdn, dnsServer, 0)
-			if err != nil {
-				log.Printf("Error resolving A record for %s: %v\n", fqdn, err)
-				continue
-			} else if len(IPAddresses) == 0 {
-				log.Printf("No A records found for %s\n", fqdn)
-				return outIfce, nil, false
-			} else {
-				return outIfce, IPAddresses[0], true
-			}
-		}
-
+		ip, supportDart := s.resolveFromOuterDNSServer(fqdn)
+		return outIfce, ip, supportDart
 	case "downlink":
 		dhcpServer, ok := dhcpServers[outIfce.Name]
 		if !ok {
@@ -128,21 +150,180 @@ func getNetworkAddr(ip string) net.IP {
 	return netAddr
 }
 
+func (s *DNSServer) iAmAuthorityFor(domain string) bool {
+	for _, ifce := range globalConfig.Interfaces {
+		if ifce.Direction == "downlink" && ifce.Domain == domain {
+			return true
+		}
+	}
+	return false
+}
+
 // ServeDNS 处理 DNS 查询
 func (s *DNSServer) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
-	// 在DART协议中，每个子域都拥有完整的IPv4地址空间，因此这个接口可能收到来自任意地址的DNS Query报文
-	// 本程序只是一个技术验证，使用轻量级的DNS库，不能返回接收到DNS Query报文的物理接口
-	// 我们目前做一个简化设计，假设每个接口对应的是一个C类网段。我们比对发出报文的源地址和本机接口地址来推测接收到报文的接口
-	clientIp := w.RemoteAddr().String()
+
+	// Mermaid Code:
+	// graph TD
+	// Start[开始查询] --> A{查询类型?}
+
+	// %% 外网查内网分支
+	// A -- 外网→内网 --> ReturnGateway[返回网关接口地址（For DART）]
+
+	// %% 内网查外网分支
+	// A -- 内网→外网 --> B{外网主机支持DART?}
+	// B -- 是 --> C{内网主机支持DART?}
+	// C -- 是 --> ReturnInternalGateway[返回网关内网接口地址（For Forward）]
+	// C -- 否 --> ReturnFakeIP[返回伪地址（For NAT-4D）]
+	// B -- 否 --> ReturnExtIP[返回外网主机IP（For NAT44）]
+
+	// %% 新增内网查内网分支
+	// A -- 内网→内网 --> D{同一内网?}
+	// D -- 是 --> ReturnHostIP[返回主机IP（Direct）]
+	// D -- 否 --> ReturnInternalGateway
+
+	// %% 结果汇聚
+	// ReturnGateway --> End[结束]
+	// ReturnExtIP --> End
+	// ReturnFakeIP --> End
+	// ReturnInternalGateway --> End
+	// ReturnHostIP --> End
+
+	if r.Opcode != dns.OpcodeQuery {
+		s.respondWithNotImplemented(w, r)
+		return
+	}
+
+	if len(r.Question) == 0 {
+		s.respondWithNotImplemented(w, r)
+		return
+	}
+
+	queriedDomain := r.Question[0].Name
+	if !strings.HasSuffix(queriedDomain, ".") {
+		queriedDomain += "."
+	}
+
+	switch r.Question[0].Qtype {
+	case dns.TypeA:
+		s.ServerAQuery(w, r)
+	case dns.TypeSOA:
+		s.respondWithSOA(w, r, queriedDomain, s.iAmAuthorityFor(queriedDomain))
+		return
+	case dns.TypeNS:
+		if s.iAmAuthorityFor(queriedDomain) {
+			s.respondWithNS(w, r, queriedDomain)
+		} else {
+			subDomain := s.subDomainContains(queriedDomain)
+			if subDomain != "" {
+				s.respondWithSOA(w, r, subDomain, true)
+			} else {
+				s.respondWithSOA(w, r, queriedDomain, false)
+			}
+		}
+	default:
+		s.respondWithNotImplemented(w, r)
+		return
+	}
+}
+
+func (s *DNSServer) subDomainContains(queriedDomain string) string {
+	for _, ifce := range globalConfig.Interfaces {
+		if ifce.Direction == "downlink" && strings.HasSuffix(queriedDomain, "."+ifce.Domain) {
+			return ifce.Domain
+		}
+	}
+	return ""
+}
+
+func (s *DNSServer) respondWithNS(w dns.ResponseWriter, r *dns.Msg, domain string) {
+	m := new(dns.Msg)
+	m.SetReply(r)
+	m.Authoritative = true
+	m.Rcode = dns.RcodeSuccess
+
+	ns := &dns.NS{
+		Hdr: dns.RR_Header{
+			Name:   domain,
+			Rrtype: dns.TypeNS,
+			Class:  dns.ClassINET,
+		},
+		Ns: "ns." + domain,
+	}
+	m.Answer = append(m.Answer, ns)
+
+	_, inboundIfce := s.findInboundInfo(w)
+	glue := &dns.A{
+		Hdr: dns.RR_Header{
+			Name:   "ns." + domain,
+			Rrtype: dns.TypeA,
+			Class:  dns.ClassINET,
+		},
+		A: inboundIfce.IPAddress[:],
+	}
+	m.Extra = append(m.Extra, glue)
+
+	w.WriteMsg(m)
+}
+
+func (s *DNSServer) respondWithSOA(w dns.ResponseWriter, r *dns.Msg, authorityDomain string, isAuthority bool) {
+	m := new(dns.Msg)
+	m.SetReply(r)
+	m.Authoritative = true
+
+	authorityDomain = dns.Fqdn(authorityDomain) // 确保是 FQDN
+
+	soa := &dns.SOA{
+		Hdr: dns.RR_Header{
+			Name:   authorityDomain,
+			Rrtype: dns.TypeSOA,
+			Class:  dns.ClassINET,
+			Ttl:    3600,
+		},
+		Ns:      "ns." + authorityDomain,
+		Mbox:    "admin." + authorityDomain,
+		Serial:  1,
+		Refresh: 86400,
+		Retry:   7200,
+		Expire:  3600,
+		Minttl:  3600,
+	}
+
+	if isAuthority {
+		m.Rcode = dns.RcodeSuccess
+		m.Answer = append(m.Answer, soa)
+	} else {
+		m.Rcode = dns.RcodeNameError
+		m.Ns = append(m.Ns, soa)
+	}
+
+	w.WriteMsg(m)
+}
+
+func (s *DNSServer) respondWithNotImplemented(w dns.ResponseWriter, r *dns.Msg) {
+	dns.HandleFailed(w, r)
+}
+
+func (s *DNSServer) findInboundInfo(w dns.ResponseWriter) (clientIp string, inboundIfce *InterfaceConfig) {
+	clientIp = w.RemoteAddr().String()
 	clientIp = clientIp[:strings.LastIndex(clientIp, ":")] // 去掉端口号
 	clientNetAddress := getNetworkAddr(clientIp)
+
 	//遍历globalConfig.Interfaces,比较clientNetAddress和接口的gateway地址的NetAddress。如果相同，则视为来自这个接口。如果没找到，就认为来自uplink接口
-	var inboundIfce *InterfaceConfig = &globalUplinkConfig
+	inboundIfce = &globalUplinkConfig
 	for i, ifce := range globalConfig.Interfaces {
 		if clientNetAddress.Equal(getNetworkAddr(ifce.Gateway)) {
 			inboundIfce = &globalConfig.Interfaces[i]
 		}
 	}
+
+	return clientIp, inboundIfce
+}
+
+func (s *DNSServer) ServerAQuery(w dns.ResponseWriter, r *dns.Msg) {
+	// 在DART协议中，每个子域都拥有完整的IPv4地址空间，因此这个接口可能收到来自任意地址的DNS Query报文
+	// 本程序只是一个技术验证，使用轻量级的DNS库，不能返回接收到DNS Query报文的物理接口
+	// 我们目前做一个简化设计，假设每个子域接口对应的是一个C类网段。我们比对发出报文的源地址和本机接口地址来推测接收到报文的接口
+	clientIp, inboundIfce := s.findInboundInfo(w)
 
 	queriedDomain := r.Question[0].Name
 
@@ -175,18 +356,30 @@ func (s *DNSServer) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	case "downlink":
 		switch outboundIfce.Direction {
 		case "uplink":
+			querierSupportDart := false
 			if dhcpServer, ok := dhcpServers[inboundIfce.Name]; ok { // 只有downlink接口才会开启DHCP SERVER
 				lease, ok := dhcpServer.leasesByIp[clientIp] // 看看查询方是不是通过DHCP获取的地址
-				if (ok && lease.DARTVersion == 0) || !ok {   // 如果没记录，说明是静态配置IP的主机，默认其不支持DART；如果有分配记录，且DARTversion==0,还是不支持DART；
-					s.respondWithPseudoIp(w, r, queriedDomain) // 分配伪地址并发送给不支持DART的本地主机
-					return
+				if ok && lease.DARTVersion == 1 {            // 如果没记录，说明是静态配置IP的主机，默认其不支持DART；如果有分配记录，且DARTversion==0,还是不支持DART；
+					querierSupportDart = true
 				}
 			}
-			// 其他情况，就返回DART网关给查询方，意思是查询方需要经过DART网关转发报文
-			s.respondWithDartGateway(w, r, queriedDomain, inboundIfce.Domain, inboundIfce.IPAddress[:])
+			ipInParentDomain, queriedSupportDart := s.resolveFromOuterDNSServer(queriedDomain)
+
+			if queriedSupportDart {
+				if querierSupportDart {
+					s.respondWithDartGateway(w, r, queriedDomain, inboundIfce.Domain, inboundIfce.IPAddress[:])
+				} else {
+					// 这里需要传入已经查询到的真实地址以供分配伪地址
+					s.respondWithPseudoIp(w, r, queriedDomain, ipInParentDomain)
+				}
+			} else {
+				// 被查询主机不支持DART，以真实的外部地址响应。主机发来报文时，目标地址不是伪地址，此时应当进行NAT44转换
+				s.respondWithIP(w, r, queriedDomain, ipInParentDomain)
+			}
+
 			return
 		case "downlink":
-			// 这是两个子域之间的横向流量，我们直接返回网关地址。理论上直接交给操作系统转发也是可以的。
+			// 这是两个子域之间的横向流量，我们直接返回网关地址。理论上直接交给操作系统转发也是可以的。所以我们返回入口网关地址
 			s.respondWithDartGateway(w, r, queriedDomain, inboundIfce.Domain, inboundIfce.IPAddress[:])
 			return
 		default:
@@ -197,35 +390,6 @@ func (s *DNSServer) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 		s.respondWithRefusal(w, r)
 		return
 	}
-
-	// 根据规则进行响应
-	// if inboundIfce != outboundIfce {
-	// 	// Looking for the allocated info from dhcpServers
-	// 	if dhcpServer, ok := dhcpServers[inboundIfce.Name]; ok { // 只有downlink接口才会开启DHCP SERVER
-	// 		lease, ok := dhcpServer.leasesByIp[clientIp] // 看看查询方是不是支持DART
-	// 		if (ok && lease.DARTVersion == 0) || !ok {   // 如果有记录，且DARTversion==0,说明不支持DART；如果没记录，说明是静态配置IP的主机，默认其不支持DART
-	// 			s.respondWithPseudoIp(w, r, queriedDomain) // 分配并发送伪地址给不支持DART的本地主机
-	// 			return
-	// 		}
-	// 	}
-
-	// 	// 所有其他情况，均认为查询方支持DART，返回DART网关
-	// 	// 在DART协议的设计中，来自不同域的主机需要由DART网关转发报文
-	// 	// 告诉查询方：你查询的目标主机需要经过本地网关转发（返回本地网关作为CNAME）
-	// 	s.respondWithDartGateway(w, r, queriedDomain, inboundIfce)
-	// 	return
-	// } else {
-	// 	// 现在考虑进出是同一个接口的情况
-	// 	if outboundIfce.Direction == "downlink" {
-	// 		s.respondWithDHCP(w, r, outboundIfce.Name, queriedDomain)
-	// 		return
-	// 	} else {
-	// 		// 根据DNS查询机制，理论上我们并不会从上行口收到被查询的主机不属本地子域的报文
-	// 		// 万一收到了，就返回拒绝服务，即告诉查询方：这不是我们负责的范围
-	// 		s.respondWithRefusal(w, r)
-	// 		return
-	// 	}
-	// }
 }
 
 // findLongestMatchingInterface 找到与域名最长匹配的接口
@@ -240,14 +404,23 @@ func (s *DNSServer) findLongestMatchingInterface(domain string) *InterfaceConfig
 	return longestMatch
 }
 
-func (s *DNSServer) respondWithPseudoIp(w dns.ResponseWriter, r *dns.Msg, domain string) {
-	// 只有内网不支持DART协议的主机查询外网域名的时候才需要以伪地址响应
+func (s *DNSServer) respondWithIP(w dns.ResponseWriter, r *dns.Msg, domain string, ip net.IP) {
+	m := new(dns.Msg)
+	m.SetReply(r)
+	m.Answer = append(m.Answer, &dns.A{
+		Hdr: dns.RR_Header{
+			Name:   domain,
+			Rrtype: dns.TypeA,
+			Class:  dns.ClassINET,
+			Ttl:    60,
+		},
+		A: ip,
+	})
+	w.WriteMsg(m)
+}
 
-	outIfce, ip, supportDart := s.resolve(domain)
-	if outIfce == nil || outIfce.Direction != "uplink" || ip == nil || !supportDart { // 远端主机必须支持DART才有意义
-		s.respondWithNxdomain(w, r)
-		return
-	}
+func (s *DNSServer) respondWithPseudoIp(w dns.ResponseWriter, r *dns.Msg, domain string, ip net.IP) {
+	// 只有内网不支持DART协议的主机查询外网域名的时候才需要以伪地址响应
 
 	// 在返回伪地址之前，我们先查询到真实地址。这样，客户机发送报文到对方的时候，马上就能从伪地址映射表中拿到真实地址
 	pseudoIp := globalPseudoIpPool.FindOrAllocate(domain, ip, DARTPort) // 我们主动发起连接的时候，目标主机必须在默认的DARTPort收取UDP报文
@@ -256,20 +429,7 @@ func (s *DNSServer) respondWithPseudoIp(w dns.ResponseWriter, r *dns.Msg, domain
 		s.respondWithServerFailure(w, r)
 		return
 	}
-
-	m := new(dns.Msg)
-	m.SetReply(r)
-	m.Answer = append(m.Answer, &dns.A{
-		Hdr: dns.RR_Header{
-			// Name:   r.Question[0].Name,
-			Name:   domain,
-			Rrtype: dns.TypeA,
-			Class:  dns.ClassINET,
-			Ttl:    60,
-		},
-		A: pseudoIp,
-	})
-	w.WriteMsg(m.SetReply(r))
+	s.respondWithIP(w, r, domain, pseudoIp)
 }
 
 func (s *DNSServer) respondWithDartGateway(w dns.ResponseWriter, r *dns.Msg, domain string, gwDomain string, gwIP net.IP) {
@@ -336,6 +496,7 @@ func (s *DNSServer) respondWithDHCP(w dns.ResponseWriter, dnsMsg *dns.Msg, ifNam
 	// 构建 DNS 响应
 	m := new(dns.Msg)
 	m.SetReply(dnsMsg)
+	m.Authoritative = true
 
 	if supportDart {
 		// Example:
