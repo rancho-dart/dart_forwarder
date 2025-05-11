@@ -20,28 +20,20 @@
 # (This will be handled by another forwarding program.)
 
 interfaces:
-  - name: ens34
+  - name: ens37
     direction: uplink # uplink有且仅有一个。uplink接口同时作为默认路由出口，所有未成功匹配downlink接口的报文从此接口转发。
     domain: cn
     gateway: 192.168.2.2
     dns_servers:
-      - 192.168.2.99
+      - 192.168.2.80
 
-  - name: ens32
+  - name: ens38
     direction: downlink
-    address_pool: 10.1.0.100-10.1.0.200
-    domain: bj.cn
-    gateway: 10.1.0.1
-    dns_servers:
-      - 10.1.0.1
-      
-  - name: ens37
-    direction: downlink
-    address_pool: 10.0.0.100-10.0.0.200
+    address_pool: 10.100.0.100-10.100.0.199
     domain: sh.cn
-    gateway: 10.0.0.1
+    gateway: 10.100.0.1
     dns_servers:
-      - 10.0.0.1
+      - 10.100.0.1
     static_bindings:
       - mac: "00:0c:29:f1:65:17"
         ip: "10.0.0.99"
