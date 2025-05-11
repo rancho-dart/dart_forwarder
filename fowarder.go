@@ -12,6 +12,7 @@ import (
 	"github.com/AkihiroSuda/go-netfilter-queue"
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
+	"github.com/miekg/dns"
 )
 
 type QueueStyle int
@@ -207,6 +208,31 @@ NextPacket:
 			hex_dump(buffer.Bytes())
 			if err := fr.SendPacket(&globalUplinkConfig, ip.DstIP, buffer.Bytes()); err != nil {
 				log.Printf("Failed to send packet: %v", err)
+				// if err msg == 'message too long', we send a ICMP package (ICMP Type 3 Code 4 ) back to src
+				// if strings.Contains(err.Error(), "message too long") {
+				// 	ip := packet.Packet.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
+				// 	icmp := &layers.ICMPv4{
+				// 		TypeCode: layers.ICMPv4TypeDestinationUnreachable<<8 | layers.ICMPv4CodeFragmentationNeeded,
+				// 		Id:       0,
+				// 		Seq:      0,
+				// 	}
+				// 	icmp.SetNetworkLayerForChecksum(ip)
+				// 	buffer := gopacket.NewSerializeBuffer()
+				// 	opts := gopacket.SerializeOptions{
+				// 		FixLengths:       true,
+				// 		ComputeChecksums: true,
+				// 	}
+				// 	err := gopacket.SerializeLayers(buffer, opts, icmp)
+				// 	if err != nil {
+				// 		log.Printf("Failed to serialize packet: %v", err)
+				// 		packet.SetVerdict(netfilter.NF_DROP)
+				// 		continue NextPacket
+				// 	}
+				// 	if err := fr.SendPacket(&globalUplinkConfig, ip.SrcIP, buffer.Bytes()); err != nil {
+				// 		log.Printf("Failed to send packet: %v", err)
+				// 	}
+				// 	continue NextPacket
+				// }
 			}
 
 			packet.SetVerdict(netfilter.NF_DROP)
@@ -291,7 +317,8 @@ NextPacket:
 			} else { // dest host doesn't support DART
 				// 删除 DART 报头和UDP报头
 				ip.DstIP = destIp
-				ip.SrcIP = globalPseudoIpPool.FindOrAllocate(string(dart.SrcFqdn), ip.SrcIP, uint16(udp.SrcPort))
+				srcFqdn := dns.Fqdn(string(dart.SrcFqdn)) // 有没有最后的"."有时候会变成问题。这里规格化一下。
+				ip.SrcIP = globalPseudoIpPool.FindOrAllocate(srcFqdn, ip.SrcIP, uint16(udp.SrcPort))
 				// ip.SrcIP = outIfce.IPAddress[:]
 				ip.Protocol = dart.Protocol
 
