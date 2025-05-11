@@ -66,9 +66,60 @@ func (fr *ForwardRoutine) processDownlinkInputPackets() {
 		if ipLayer != nil {
 			ip := ipLayer.(*layers.IPv4)
 			fmt.Printf("Received packet: %s -> %s\n", ip.SrcIP, ip.DstIP)
+
+			// 检查是否为 UDP 报文且目标端口为 DART 端口
+			if ip.Protocol == layers.IPProtocolUDP {
+				udpLayer := packet.Packet.Layer(layers.LayerTypeUDP)
+				if udpLayer != nil {
+					udp := udpLayer.(*layers.UDP)
+					if udp.DstPort == DARTPort {
+						// 解析 DART 头
+						dartLayer := packet.Packet.Layer(LayerTypeDART)
+						if dartLayer != nil {
+							dart := dartLayer.(*DART)
+							fmt.Printf("Received DART packet: %s -> %s\n", dart.SrcFqdn, dart.DstFqdn)
+
+							// 调用 dnsServer.resolve() 获取目标 IP
+							outIfce, destIp, _ := dnsServer.resolve(string(dart.DstFqdn))
+							if outIfce == nil || destIp == nil {
+								// 没有找到合适的转发接口或目标 IP，丢弃报文
+								packet.SetVerdict(netfilter.NF_DROP)
+								continue
+							}
+
+							// 修改 IP 报头的目标地址和源地址
+							ip.DstIP = destIp
+							ip.SrcIP = globalUplinkConfig.IPAddress[:]
+							udp.SetNetworkLayerForChecksum(ip)
+
+							// 重新序列化 IP + UDP + DART + 原始 Payload
+							buffer := gopacket.NewSerializeBuffer()
+							opts := gopacket.SerializeOptions{
+								FixLengths:       true,
+								ComputeChecksums: true,
+							}
+							err := gopacket.SerializeLayers(buffer, opts, ip, udp, dart, gopacket.Payload(dart.Payload))
+							if err != nil {
+								log.Printf("Failed to serialize packet: %v", err)
+								packet.SetVerdict(netfilter.NF_DROP)
+								continue
+							}
+
+							// 从上行接口发出修改后的报文
+							if err := fr.SendPacket(&globalUplinkConfig, destIp, buffer.Bytes()); err != nil {
+								log.Printf("Failed to send packet: %v", err)
+							}
+
+							// 丢弃原始报文
+							packet.SetVerdict(netfilter.NF_DROP)
+							continue
+						}
+					}
+				}
+			}
 		}
 
-		// 一定要给出 verdict，不然内核一直等着
+		// 默认放行非 DART 报文
 		packet.SetVerdict(netfilter.NF_ACCEPT)
 	}
 }
