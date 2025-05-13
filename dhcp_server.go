@@ -20,10 +20,10 @@ import (
 // startDHCPServerModule 启动 DHCP Server 模块
 
 type DHCPServer struct {
-	ifConfig      InterfaceConfig
+	dlIfce        DownLinkInterface
 	options       dhcp4.Options
-	startIP       net.IP
-	endIP         net.IP
+	headIP        net.IP
+	tailIP        net.IP
 	leaseDuration time.Duration
 	leasesByIp    map[string]leaseInfo // key: IP string
 	leasesByFQDN  map[string]leaseInfo
@@ -55,21 +55,18 @@ func IPToUint32(ip net.IP) uint32 {
 var dhcpServers map[string]*DHCPServer = make(map[string]*DHCPServer)
 
 func startDHCPServerModule() {
-	// 遍历globalConfig中的接口，启动DHCP服务
-
-	// 为每个downlink接口启动DHCP服务器
-	for _, iface := range globalConfig.Interfaces {
-		if iface.Direction == "downlink" && iface.AddressPool != "" {
+	// 遍历globalConfig中的下行接口，启动DHCP服务
+	for _, iface := range CONFIG.Downlinks {
+		if iface.AddressPool != "" {
 			server := NewDHCPServer(iface)
 			pc, err := conn.NewUDP4BoundListener(iface.Name, ":67")
 			if err != nil {
-				log.Printf("Error creating UDP listener for %s: %v", iface.Name, err)
-				continue
+				log.Fatalf("Error creating UDP listener for %s: %v", iface.Name, err)
 			}
 			dhcpServers[iface.Name] = server
 
 			go func(pc net.PacketConn, server *DHCPServer) {
-				fmt.Printf("DHCP server started on %s...\n", server.ifConfig.Name)
+				fmt.Printf("DHCP server started on %s...\n", server.dlIfce.Name)
 				log.Fatal(dhcp4.Serve(pc, server))
 			}(pc, server)
 		}
@@ -79,44 +76,38 @@ func startDHCPServerModule() {
 	select {}
 }
 
-func NewDHCPServer(ifCfg InterfaceConfig) *DHCPServer {
+func NewDHCPServer(dlIfce DownLinkInterface) *DHCPServer {
 	// 解析地址池
-	poolParts := strings.Split(ifCfg.AddressPool, "-")
+	poolParts := strings.Split(dlIfce.AddressPool, "-")
 	if len(poolParts) != 2 {
-		log.Fatalf("Invalid address pool format for %s: %s", ifCfg.Name, ifCfg.AddressPool)
+		log.Fatalf("Invalid address pool format for %s: %s", dlIfce.Name, dlIfce.AddressPool)
 	}
 	startIP := net.ParseIP(poolParts[0]).To4()
 	endIP := net.ParseIP(poolParts[1]).To4()
 	if startIP == nil || endIP == nil {
-		log.Fatalf("Invalid IP address in pool for %s", ifCfg.Name)
+		log.Fatalf("Invalid IP address in pool for %s", dlIfce.Name)
 	}
 
 	// 准备DHCP选项
 	options := dhcp4.Options{
 		dhcp4.OptionSubnetMask: []byte(net.ParseIP("255.255.255.0").To4()),
-		dhcp4.OptionRouter:     []byte(net.ParseIP(ifCfg.Gateway).To4()),
-		dhcp4.OptionDomainName: []byte(ifCfg.Domain),
+		dhcp4.OptionRouter:     []byte(dlIfce.ipNet.IP.To4()),
+		dhcp4.OptionDomainName: []byte(dlIfce.Domain),
 	}
 
 	// 添加DNS服务器
-	var dnsServers []byte
-	for _, dns := range ifCfg.DNSServers {
-		dnsServers = append(dnsServers, net.ParseIP(dns).To4()...)
-	}
-	if len(dnsServers) > 0 {
-		options[dhcp4.OptionDomainNameServer] = dnsServers
-	}
+	options[dhcp4.OptionDomainNameServer] = dlIfce.ipNet.IP
 
 	// 初始化静态租约
 	staticLeases := make(map[string]string)
-	for _, binding := range ifCfg.StaticBindings {
+	for _, binding := range dlIfce.StaticBindings {
 		staticLeases[strings.ToLower(binding.MAC)] = binding.IP
 	}
 
 	// 从数据库中加载租约信息
 	var leasesByIp = make(map[string]leaseInfo)
 	var leasesByFQDN = make(map[string]leaseInfo)
-	if ifCfg.AddressPool != "" {
+	if dlIfce.AddressPool != "" {
 		rows, err := globalDB.Query("SELECT mac_address, ip_address, fqdn, dart_version, Expiry FROM dhcp_leases")
 		if err != nil {
 			log.Printf("Error reading from SQLite database: %v\n", err)
@@ -154,10 +145,10 @@ func NewDHCPServer(ifCfg InterfaceConfig) *DHCPServer {
 	}
 
 	return &DHCPServer{
-		ifConfig:      ifCfg,
+		dlIfce:        dlIfce,
 		options:       options,
-		startIP:       startIP,
-		endIP:         endIP,
+		headIP:        startIP,
+		tailIP:        endIP,
 		leaseDuration: 24 * time.Hour, // 默认租约24小时
 		leasesByIp:    leasesByIp,
 		leasesByFQDN:  leasesByFQDN,
@@ -190,7 +181,7 @@ func (s *DHCPServer) ServeDHCP(p dhcp4.Packet, msgType dhcp4.MessageType, option
 		// 检查静态绑定
 		if ip, ok := s.staticLeases[mac]; ok {
 			staticIP := net.ParseIP(ip).To4()
-			return dhcp4.ReplyPacket(p, dhcp4.Offer, net.ParseIP(s.ifConfig.Gateway).To4(), staticIP, s.leaseDuration,
+			return dhcp4.ReplyPacket(p, dhcp4.Offer, s.dlIfce.ipNet.IP, staticIP, s.leaseDuration,
 				s.options.SelectOrderOrAll(options[dhcp4.OptionParameterRequestList]))
 		}
 
@@ -199,11 +190,11 @@ func (s *DHCPServer) ServeDHCP(p dhcp4.Packet, msgType dhcp4.MessageType, option
 		if ip == nil {
 			return nil
 		}
-		return dhcp4.ReplyPacket(p, dhcp4.Offer, net.ParseIP(s.ifConfig.Gateway).To4(), ip, s.leaseDuration,
+		return dhcp4.ReplyPacket(p, dhcp4.Offer, s.dlIfce.ipNet.IP, ip, s.leaseDuration,
 			s.options.SelectOrderOrAll(options[dhcp4.OptionParameterRequestList]))
 	case dhcp4.Request:
 		// 检查是否是发给我们的请求
-		if server, ok := options[dhcp4.OptionServerIdentifier]; ok && !net.IP(server).Equal(net.ParseIP(s.ifConfig.Gateway).To4()) {
+		if server, ok := options[dhcp4.OptionServerIdentifier]; ok && !net.IP(server).Equal(s.dlIfce.ipNet.IP) {
 			return nil
 		}
 
@@ -239,7 +230,7 @@ func (s *DHCPServer) ServeDHCP(p dhcp4.Packet, msgType dhcp4.MessageType, option
 					hostname = string(fqdnBin)
 				}
 
-				domain := s.ifConfig.Domain
+				domain := s.dlIfce.Domain
 
 				fqdn := hostname + "." + domain
 
@@ -266,11 +257,11 @@ func (s *DHCPServer) ServeDHCP(p dhcp4.Packet, msgType dhcp4.MessageType, option
 				if err != nil {
 					log.Printf("Error writing to SQLite database: %v\n", err)
 				}
-				return dhcp4.ReplyPacket(p, dhcp4.ACK, net.ParseIP(s.ifConfig.Gateway).To4(), reqIP, s.leaseDuration,
+				return dhcp4.ReplyPacket(p, dhcp4.ACK, s.dlIfce.ipNet.IP, reqIP, s.leaseDuration,
 					s.options.SelectOrderOrAll(options[dhcp4.OptionParameterRequestList]))
 			}
 		}
-		return dhcp4.ReplyPacket(p, dhcp4.NAK, net.ParseIP(s.ifConfig.Gateway).To4(), nil, 0, nil)
+		return dhcp4.ReplyPacket(p, dhcp4.NAK, s.dlIfce.ipNet.IP, nil, 0, nil)
 
 	case dhcp4.Release, dhcp4.Decline:
 		// 释放租约
@@ -295,8 +286,8 @@ func (s *DHCPServer) findFreeIP(mac string) net.IP {
 	}
 
 	// 从地址池中查找可用IP
-	start := IPToUint32(s.startIP)
-	end := IPToUint32(s.endIP)
+	start := IPToUint32(s.headIP)
+	end := IPToUint32(s.tailIP)
 
 	for i := start; i <= end; i++ {
 		ip := Uint32ToIP(i)
@@ -320,8 +311,8 @@ func (s *DHCPServer) findFreeIP(mac string) net.IP {
 
 func (s *DHCPServer) isInPool(ip net.IP) bool {
 	ipUint := IPToUint32(ip)
-	start := IPToUint32(s.startIP)
-	end := IPToUint32(s.endIP)
+	start := IPToUint32(s.headIP)
+	end := IPToUint32(s.tailIP)
 	return ipUint >= start && ipUint <= end
 }
 

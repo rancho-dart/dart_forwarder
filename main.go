@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"os"
 	"sync"
 	"time"
@@ -38,13 +39,11 @@ func initDB() (*sql.DB, error) {
 
 func main() {
 	// 初始化配置
-	cfg, uplink, err := loadConfig()
+	cfg, err := LoadConfig()
 	if err != nil {
-		fmt.Printf("Error loading config: %v\n", err)
-		os.Exit(1)
+		log.Fatalln("Error loading config:", err)
 	}
-	globalConfig = *cfg
-	globalUplinkConfig = *uplink
+	CONFIG = *cfg
 
 	var errDB error
 	globalDB, errDB = initDB()
@@ -54,17 +53,9 @@ func main() {
 	}
 	defer globalDB.Close() // 程序退出时关闭数据库连接
 
-	// 启动 Forward 模块
+	// 1.启动 Forward 模块
 	var wg sync.WaitGroup
 
-	// 启动 DHCP Server 模块
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		startDHCPServerModule()
-	}()
-
-	// time.Sleep(1 * time.Second)
 	// 启动 DNS Server 模块
 	wg.Add(1)
 	go func() {
@@ -72,8 +63,17 @@ func main() {
 		startDNSServerModule()
 	}()
 
-	time.Sleep(200 * time.Millisecond)
+	// 2.启动 DHCP Server 模块
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		startDHCPServerModule()
+	}()
 
+	// time.Sleep(1 * time.Second)
+
+	time.Sleep(200 * time.Millisecond)
+	// Forwarder在启动的时候会检查配置的域名是否可从上联口解析，因此需要放在最后启动
 	wg.Add(1)
 	go func() {
 		defer wg.Done()

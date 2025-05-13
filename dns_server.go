@@ -68,7 +68,7 @@ func resolveARecord(domain, dnsServer string, depth int) ([]net.IP, bool, error)
 }
 
 func (s *DNSServer) resolveFromOuterDNSServer(fqdn string) (ip net.IP, supportDart bool) {
-	for _, dnsServer := range globalUplinkConfig.DNSServers {
+	for _, dnsServer := range CONFIG.Uplink.DNSServers {
 		IPAddresses, supportDart, err := resolveARecord(fqdn, dnsServer, 0)
 		if err != nil {
 			log.Printf("Error resolving A record for %s: %v\n", fqdn, err)
@@ -83,38 +83,30 @@ func (s *DNSServer) resolveFromOuterDNSServer(fqdn string) (ip net.IP, supportDa
 	return nil, false
 }
 
-func (s *DNSServer) resolve(fqdn string) (outIfce *InterfaceConfig, ip net.IP, supportDart bool) {
+func (s *DNSServer) resolve(fqdn string) (outIfce *DownLinkInterface, ip net.IP, supportDart bool) {
 	if !strings.HasSuffix(fqdn, ".") {
 		fqdn += "."
 	}
 
-	outIfce = s.findLongestMatchingInterface(fqdn)
+	outIfce = s.findLongestMatchingInterface(fqdn) // Only find in the downlink interfaces!
 
 	if outIfce == nil {
 		return nil, nil, false
 	}
 
-	switch outIfce.Direction {
-	case "uplink":
-		// 从outIfce.DNSServers指定的DNS服务器中选择一个，发送DNS QUERY解析fqdn的A记录
-		ip, supportDart := s.resolveFromOuterDNSServer(fqdn)
-		return outIfce, ip, supportDart
-	case "downlink":
-		dhcpServer, ok := dhcpServers[outIfce.Name]
-		if !ok {
-			return nil, nil, false
-		}
-
-		lease, ok := dhcpServer.leasesByFQDN[fqdn]
-		if !ok {
-			return nil, nil, false
-		}
-
-		ip = lease.IP
-		supportDart = lease.DARTVersion > 0
-		return
+	dhcpServer, ok := dhcpServers[outIfce.Name]
+	if !ok {
+		return nil, nil, false
 	}
-	return nil, nil, false
+
+	lease, ok := dhcpServer.leasesByFQDN[fqdn]
+	if !ok {
+		return nil, nil, false
+	}
+
+	ip = lease.IP
+	supportDart = lease.DARTVersion > 0
+	return
 }
 
 // NewDNSServer 创建一个新的 DNS Server 实例
@@ -137,7 +129,9 @@ func (s *DNSServer) startServer(port int) {
 	server.Handler = s
 	fmt.Printf("DNS Server started on port %d\n", port)
 	if err := server.ListenAndServe(); err != nil {
-		fmt.Printf("Failed to start DNS server on port %d: %v\n", port, err)
+		log.Printf("Failed to start DNS server:[%v]\n", err)
+		log.Printf("Another DNS server is already running?\n")
+		log.Fatal("Fatal error. Exit.\n")
 	}
 }
 
@@ -151,8 +145,8 @@ func getNetworkAddr(ip string) net.IP {
 }
 
 func (s *DNSServer) iAmAuthorityFor(domain string) bool {
-	for _, ifce := range globalConfig.Interfaces {
-		if ifce.Direction == "downlink" && ifce.Domain == domain {
+	for _, ifce := range CONFIG.Downlinks {
+		if ifce.Domain == domain {
 			return true
 		}
 	}
@@ -227,8 +221,8 @@ func (s *DNSServer) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 }
 
 func (s *DNSServer) subDomainContains(queriedDomain string) string {
-	for _, ifce := range globalConfig.Interfaces {
-		if ifce.Direction == "downlink" && strings.HasSuffix(queriedDomain, "."+ifce.Domain) {
+	for _, ifce := range CONFIG.Downlinks {
+		if strings.HasSuffix(queriedDomain, "."+ifce.Domain) {
 			return ifce.Domain
 		}
 	}
@@ -258,7 +252,7 @@ func (s *DNSServer) respondWithNS(w dns.ResponseWriter, r *dns.Msg, domain strin
 			Rrtype: dns.TypeA,
 			Class:  dns.ClassINET,
 		},
-		A: inboundIfce.IPAddress[:],
+		A: inboundIfce.ipNet.IP,
 	}
 	m.Extra = append(m.Extra, glue)
 
@@ -303,16 +297,16 @@ func (s *DNSServer) respondWithNotImplemented(w dns.ResponseWriter, r *dns.Msg) 
 	dns.HandleFailed(w, r)
 }
 
-func (s *DNSServer) findInboundInfo(w dns.ResponseWriter) (clientIp string, inboundIfce *InterfaceConfig) {
+func (s *DNSServer) findInboundInfo(w dns.ResponseWriter) (clientIp string, inboundIfce *DownLinkInterface) {
 	clientIp = w.RemoteAddr().String()
 	clientIp = clientIp[:strings.LastIndex(clientIp, ":")] // 去掉端口号
 	clientNetAddress := getNetworkAddr(clientIp)
 
 	//遍历globalConfig.Interfaces,比较clientNetAddress和接口的gateway地址的NetAddress。如果相同，则视为来自这个接口。如果没找到，就认为来自uplink接口
-	inboundIfce = &globalUplinkConfig
-	for i, ifce := range globalConfig.Interfaces {
-		if clientNetAddress.Equal(getNetworkAddr(ifce.Gateway)) {
-			inboundIfce = &globalConfig.Interfaces[i]
+
+	for i, ifce := range CONFIG.Downlinks {
+		if clientNetAddress.Equal(getNetworkAddr(ifce.ipNet.IP.String())) {
+			inboundIfce = &CONFIG.Downlinks[i]
 		}
 	}
 
@@ -323,82 +317,82 @@ func (s *DNSServer) ServerAQuery(w dns.ResponseWriter, r *dns.Msg) {
 	// 在DART协议中，每个子域都拥有完整的IPv4地址空间，因此这个接口可能收到来自任意地址的DNS Query报文
 	// 本程序只是一个技术验证，使用轻量级的DNS库，不能返回接收到DNS Query报文的物理接口
 	// 我们目前做一个简化设计，假设每个子域接口对应的是一个C类网段。我们比对发出报文的源地址和本机接口地址来推测接收到报文的接口
-	clientIp, inboundIfce := s.findInboundInfo(w)
+	// clientIp, inboundIfce := s.findInboundInfo(w)
 
-	queriedDomain := r.Question[0].Name
+	// queriedDomain := r.Question[0].Name
 
-	// 找到最长匹配的接口
-	outboundIfce := s.findLongestMatchingInterface(queriedDomain)
-	if outboundIfce == nil {
-		s.respondWithNxdomain(w, r)
-		return
-	}
+	// // 找到最长匹配的接口
+	// outboundIfce := s.findLongestMatchingInterface(queriedDomain)
+	// if outboundIfce == nil {
+	// 	s.respondWithNxdomain(w, r)
+	// 	return
+	// }
 
-	// 先处理出入是同一个接口的情况
-	if inboundIfce.Name == outboundIfce.Name {
-		switch inboundIfce.Direction {
-		case "uplink":
-			s.respondWithRefusal(w, r)
-		case "downlink":
-			s.respondWithDHCP(w, r, inboundIfce.Name, queriedDomain)
-		default:
-			s.respondWithRefusal(w, r) // 暂时应该不会有这种可能
-		}
-		return
-	}
+	// // 先处理出入是同一个接口的情况
+	// if inboundIfce.Name == outboundIfce.Name {
+	// 	switch inboundIfce.Direction {
+	// 	case "uplink":
+	// 		s.respondWithRefusal(w, r)
+	// 	case "downlink":
+	// 		s.respondWithDHCP(w, r, inboundIfce.Name, queriedDomain)
+	// 	default:
+	// 		s.respondWithRefusal(w, r) // 暂时应该不会有这种可能
+	// 	}
+	// 	return
+	// }
 
-	// 现在处理入口与出口不相同的情况
-	switch inboundIfce.Direction {
-	case "uplink":
-		// 这是从上行口去下行口
-		s.respondWithDartGateway(w, r, queriedDomain, outboundIfce.Domain, inboundIfce.IPAddress[:])
-		return
-	case "downlink":
-		switch outboundIfce.Direction {
-		case "uplink":
-			querierSupportDart := false
-			if dhcpServer, ok := dhcpServers[inboundIfce.Name]; ok { // 只有downlink接口才会开启DHCP SERVER
-				lease, ok := dhcpServer.leasesByIp[clientIp] // 看看查询方是不是通过DHCP获取的地址
-				if ok && lease.DARTVersion == 1 {            // 如果没记录，说明是静态配置IP的主机，默认其不支持DART；如果有分配记录，且DARTversion==0,还是不支持DART；
-					querierSupportDart = true
-				}
-			}
-			ipInParentDomain, queriedSupportDart := s.resolveFromOuterDNSServer(queriedDomain)
+	// // 现在处理入口与出口不相同的情况
+	// switch inboundIfce.Direction {
+	// case "uplink":
+	// 	// 这是从上行口去下行口
+	// 	s.respondWithDartGateway(w, r, queriedDomain, outboundIfce.Domain, inboundIfce.Address[:])
+	// 	return
+	// case "downlink":
+	// 	switch outboundIfce.Direction {
+	// 	case "uplink":
+	// 		querierSupportDart := false
+	// 		if dhcpServer, ok := dhcpServers[inboundIfce.Name]; ok { // 只有downlink接口才会开启DHCP SERVER
+	// 			lease, ok := dhcpServer.leasesByIp[clientIp] // 看看查询方是不是通过DHCP获取的地址
+	// 			if ok && lease.DARTVersion == 1 {            // 如果没记录，说明是静态配置IP的主机，默认其不支持DART；如果有分配记录，且DARTversion==0,还是不支持DART；
+	// 				querierSupportDart = true
+	// 			}
+	// 		}
+	// 		ipInParentDomain, queriedSupportDart := s.resolveFromOuterDNSServer(queriedDomain)
 
-			if queriedSupportDart {
-				if querierSupportDart {
-					s.respondWithDartGateway(w, r, queriedDomain, inboundIfce.Domain, inboundIfce.IPAddress[:])
-				} else {
-					// 这里需要传入已经查询到的真实地址以供分配伪地址
-					s.respondWithPseudoIp(w, r, queriedDomain, ipInParentDomain)
-				}
-			} else {
-				// 被查询主机不支持DART，以真实的外部地址响应。主机发来报文时，目标地址不是伪地址，此时应当进行NAT44转换
-				s.respondWithIP(w, r, queriedDomain, ipInParentDomain)
-			}
+	// 		if queriedSupportDart {
+	// 			if querierSupportDart {
+	// 				s.respondWithDartGateway(w, r, queriedDomain, inboundIfce.Domain, inboundIfce.Address[:])
+	// 			} else {
+	// 				// 这里需要传入已经查询到的真实地址以供分配伪地址
+	// 				s.respondWithPseudoIp(w, r, queriedDomain, ipInParentDomain)
+	// 			}
+	// 		} else {
+	// 			// 被查询主机不支持DART，以真实的外部地址响应。主机发来报文时，目标地址不是伪地址，此时应当进行NAT44转换
+	// 			s.respondWithIP(w, r, queriedDomain, ipInParentDomain)
+	// 		}
 
-			return
-		case "downlink":
-			// 这是两个子域之间的横向流量，我们直接返回网关地址。理论上直接交给操作系统转发也是可以的。所以我们返回入口网关地址
-			s.respondWithDartGateway(w, r, queriedDomain, inboundIfce.Domain, inboundIfce.IPAddress[:])
-			return
-		default:
-			s.respondWithRefusal(w, r)
-			return
-		}
-	default:
-		s.respondWithRefusal(w, r)
-		return
-	}
+	// 		return
+	// 	case "downlink":
+	// 		// 这是两个子域之间的横向流量，我们直接返回网关地址。理论上直接交给操作系统转发也是可以的。所以我们返回入口网关地址
+	// 		s.respondWithDartGateway(w, r, queriedDomain, inboundIfce.Domain, inboundIfce.Address[:])
+	// 		return
+	// 	default:
+	// 		s.respondWithRefusal(w, r)
+	// 		return
+	// 	}
+	// default:
+	// 	s.respondWithRefusal(w, r)
+	// 	return
+	// }
 }
 
 // findLongestMatchingInterface 找到与域名最长匹配的接口
-func (s *DNSServer) findLongestMatchingInterface(domain string) *InterfaceConfig {
-	var longestMatch *InterfaceConfig = &globalUplinkConfig
+func (s *DNSServer) findLongestMatchingInterface(domain string) *DownLinkInterface {
+	var longestMatch *DownLinkInterface
 
-	for i, iface := range globalConfig.Interfaces {
-		if iface.Direction == "downlink" && strings.HasSuffix(domain, iface.Domain) && len(iface.Domain) > len((longestMatch.Domain)) {
-			longestMatch = &globalConfig.Interfaces[i]
+	for i, iface := range CONFIG.Downlinks {
+		if strings.HasSuffix(domain, iface.Domain) && len(iface.Domain) > len((longestMatch.Domain)) {
+			longestMatch = &CONFIG.Downlinks[i]
 		}
 	}
 	return longestMatch

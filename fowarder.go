@@ -30,16 +30,16 @@ func (s QueueStyle) String() string {
 type ForwardRoutine struct {
 	queue *netfilter.NFQueue
 	style QueueStyle
-	ifce  InterfaceConfig
+	ifce  LinkInterface
 	sock  int
 }
 
 func (fr *ForwardRoutine) Run() {
 	defer fr.queue.Close()
 
-	if fr.ifce.Direction == "uplink" {
+	if fr.ifce.Direction == Upwards {
 		fr.processUplinkInputPackets()
-	} else if fr.ifce.Direction == "downlink" {
+	} else if fr.ifce.Direction == Downwards {
 		if fr.style == Input {
 			fr.processDownlinkInputPackets()
 		} else if fr.style == Forward {
@@ -48,7 +48,7 @@ func (fr *ForwardRoutine) Run() {
 	}
 }
 
-func (fr *ForwardRoutine) SendPacket(ifce *InterfaceConfig, DstIP net.IP, packet []byte) error {
+func (fr *ForwardRoutine) SendPacket(ifce *LinkInterface, DstIP net.IP, packet []byte) error {
 	// Send packet out from interface ifce. packet shoud start from ip header
 	fmt.Printf("Send packet out of %s to %s\n", ifce.Name, DstIP)
 
@@ -57,7 +57,7 @@ func (fr *ForwardRoutine) SendPacket(ifce *InterfaceConfig, DstIP net.IP, packet
 	addr := syscall.SockaddrInet4{}
 	copy(addr.Addr[:], DstIP.To4())
 
-	syscall.SetsockoptString(fr.sock, syscall.SOL_SOCKET, syscall.SO_BINDTODEVICE, ifce.Name)
+	syscall.SetsockoptString(fr.sock, syscall.SOL_SOCKET, syscall.SO_BINDTODEVICE, ifce.Name())
 	return syscall.Sendto(fr.sock, packet, 0, &addr)
 }
 
@@ -81,6 +81,7 @@ func (fr *ForwardRoutine) processDownlinkInputPackets() {
 							fmt.Printf("Received DART packet: %s -> %s\n", dart.SrcFqdn, dart.DstFqdn)
 
 							// 调用 dnsServer.resolve() 获取目标 IP
+							// TODO: All packet inbound from downlink will be processed to uplink. thus, shouldn't call resolve, which is used to find downlink interface
 							outIfce, destIp, _ := dnsServer.resolve(string(dart.DstFqdn))
 							if outIfce == nil || destIp == nil {
 								// 没有找到合适的转发接口或目标 IP，丢弃报文
@@ -90,7 +91,7 @@ func (fr *ForwardRoutine) processDownlinkInputPackets() {
 
 							// 修改 IP 报头的目标地址和源地址
 							ip.DstIP = destIp
-							ip.SrcIP = globalUplinkConfig.IPAddress[:]
+							ip.SrcIP = CONFIG.Uplink.ipNet.IP
 							udp.SetNetworkLayerForChecksum(ip)
 
 							// 重新序列化 IP + UDP + DART + 原始 Payload
@@ -107,7 +108,7 @@ func (fr *ForwardRoutine) processDownlinkInputPackets() {
 							}
 
 							// 从上行接口发出修改后的报文
-							if err := fr.SendPacket(&globalUplinkConfig, destIp, buffer.Bytes()); err != nil {
+							if err := fr.SendPacket(&CONFIG.Uplink.LinkInterface, destIp, buffer.Bytes()); err != nil {
 								log.Printf("Failed to send packet: %v", err)
 							}
 
@@ -126,7 +127,7 @@ func (fr *ForwardRoutine) processDownlinkInputPackets() {
 }
 
 func (fr *ForwardRoutine) processDownlinkForwardPackets() {
-	// 这里处理来自downlink发往伪地址的报文。因为是发往伪地址，这些报文会进入FORWARD队列。报文的去向，必须是uplink方向（目前我们
+	// 这里处理来自downlink发往伪地址的报文。因为是发往伪地址，这些报文会进入FORWARD队列。报文的去向，必须是CONFIG.Uplink方向（目前我们
 	// 只实现这个）。这些报文进来的时候没有DART封装，我们要根据伪地址查出目标主机的FQDN和真实IP（也没有那么真实，其实是上联接口所
 	// 在域中的地址），给报文加上DART报头，设置IP层头的DstIP为真实IP，然后转发给目标主机。
 NextPacket:
@@ -156,7 +157,7 @@ NextPacket:
 
 			DstFqdn = strings.TrimSuffix(DstFqdn, ".")
 
-			server, ok := dhcpServers[fr.ifce.Name]
+			server, ok := dhcpServers[fr.ifce.Name()]
 			if !ok || server == nil {
 				fmt.Printf("no DHCP server for interface %s\n", fr.ifce.Name)
 				continue NextPacket
@@ -186,7 +187,7 @@ NextPacket:
 				Length:  uint16(len(dart.Payload)) + uint16(dart.HeaderLen()) + 8, // UDP 头长度为 8 字节
 			}
 
-			ip.SrcIP = globalUplinkConfig.IPAddress[:]
+			ip.SrcIP = CONFIG.Uplink.ipNet.IP
 			ip.DstIP = DstIP
 			ip.Protocol = layers.IPProtocolUDP
 
@@ -206,7 +207,7 @@ NextPacket:
 			}
 
 			hex_dump(buffer.Bytes())
-			if err := fr.SendPacket(&globalUplinkConfig, ip.DstIP, buffer.Bytes()); err != nil {
+			if err := fr.SendPacket(&CONFIG.Uplink.LinkInterface, ip.DstIP, buffer.Bytes()); err != nil {
 				log.Printf("Failed to send packet: %v", err)
 				// if err msg == 'message too long', we send a ICMP package (ICMP Type 3 Code 4 ) back to src
 				// if strings.Contains(err.Error(), "message too long") {
@@ -228,7 +229,7 @@ NextPacket:
 				// 		packet.SetVerdict(netfilter.NF_DROP)
 				// 		continue NextPacket
 				// 	}
-				// 	if err := fr.SendPacket(&globalUplinkConfig, ip.SrcIP, buffer.Bytes()); err != nil {
+				// 	if err := fr.SendPacket(&globalCONFIG.UplinkConfig, ip.SrcIP, buffer.Bytes()); err != nil {
 				// 		log.Printf("Failed to send packet: %v", err)
 				// 	}
 				// 	continue NextPacket
@@ -245,7 +246,7 @@ NextPacket:
 }
 
 func (fr *ForwardRoutine) processUplinkInputPackets() {
-	// 这里处理来自uplink的报文
+	// 这里处理来自CONFIG.Uplink的报文
 	// 从这个接口进来的报文，只有DART封装的需要转发，其他的都透明通过
 	// 报文的去向，必须是downlink方向
 	// 目的主机有两种可能：支持DART协议，或者不支持
@@ -304,7 +305,7 @@ NextPacket:
 			var err error
 			if supportDart {
 				// 更新 IP 地址
-				ip.SrcIP = outIfce.IPAddress[:]
+				ip.SrcIP = outIfce.ipNet.IP
 				ip.DstIP = destIp
 
 				// 重新构造 UDP 层，为计算校验和准备
@@ -361,7 +362,7 @@ NextPacket:
 
 			// hex_dump(buffer.Bytes())
 			// 从 outIfce 指定的端口发出报文
-			if err := fr.SendPacket(outIfce, destIp, buffer.Bytes()); err != nil {
+			if err := fr.SendPacket(&outIfce.LinkInterface, destIp, buffer.Bytes()); err != nil {
 				log.Printf("Failed to send packet: %v", err)
 			}
 
@@ -413,16 +414,17 @@ func hex_dump(data []byte) {
 	fmt.Println()
 }
 
-func createAndStartQueue(queueNo uint16, ifce InterfaceConfig, style QueueStyle) {
+func createAndStartQueue(queueNo uint16, ifce LinkInterface, style QueueStyle) {
 	queue, err := netfilter.NewNFQueue(queueNo, 1000, netfilter.NF_DEFAULT_PACKET_SIZE)
 	if err != nil {
-		log.Fatal(fmt.Errorf("error creating queue: %v", err))
+		log.Fatalf("error creating queue: %v", err)
 	}
 
 	sock, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_RAW, syscall.IPPROTO_RAW) // 这种方式创建的sock只能发送从IP头开始的数据，不能指定接口发送。严格来说这种方式不符合DART的设计。但是用于家庭网关或者中小企业网关场景，也差强人意了。我们省点事。
 	if err != nil {
 		log.Fatalf("Failed to create raw socket: %v", err)
 	}
+
 	err = syscall.SetsockoptInt(sock, syscall.IPPROTO_IP, syscall.IP_HDRINCL, 1) // 设置 IP_HDRINCL，表示我们自己构造 IP 头
 	if err != nil {
 		log.Fatalf("Failed to set IP_HDRINCL: %v", err)
@@ -444,30 +446,24 @@ func startForwardModule() {
 	fmt.Println("Creating queues & iptable rules to capture packets...")
 
 	var queueNo uint16 = 0
-	for _, ifce := range globalConfig.Interfaces {
-		switch ifce.Direction {
-		case "uplink":
-			// 创建并启动 uplink 队列
-			createAndStartQueue(queueNo, ifce, Input)
 
-			if err := rm.AddRule("filter", "INPUT", []string{"-i", ifce.Name, "-p", "udp", "--dport", "55847", "-j", "NFQUEUE", "--queue-num", strconv.Itoa(int(queueNo))}); err != nil {
-				log.Fatalf("Failed to set iptables rule for uplink input: %v", err)
-			}
-			queueNo++
-		case "downlink":
-			createAndStartQueue(queueNo, ifce, Forward)
-			if err := rm.AddRule("filter", "FORWARD", []string{"-i", ifce.Name, "-j", "NFQUEUE", "--queue-num", strconv.Itoa(int(queueNo))}); err != nil {
-				log.Fatalf("Failed to set iptables rule for downlink forward: %v", err)
-			}
-			queueNo++
+	createAndStartQueue(queueNo, CONFIG.Uplink.LinkInterface, Input)
+	if err := rm.AddRule("filter", "INPUT", []string{"-i", CONFIG.Uplink.Name, "-p", "udp", "--dport", "55847", "-j", "NFQUEUE", "--queue-num", strconv.Itoa(int(queueNo))}); err != nil {
+		log.Fatalf("Failed to set iptables rule for CONFIG.Uplink input: %v", err)
+	}
+	queueNo++
 
-			createAndStartQueue(queueNo, ifce, Input)
-			if err := rm.AddRule("filter", "INPUT", []string{"-i", ifce.Name, "-p", "udp", "--dport", "55847", "-j", "NFQUEUE", "--queue-num", strconv.Itoa(int(queueNo))}); err != nil {
-				log.Fatalf("Failed to set iptables rule for downlink input: %v", err)
-			}
-			queueNo++
-		default:
-			log.Printf("Unknown direction: %s", ifce.Direction)
+	for _, ifce := range CONFIG.Downlinks {
+		createAndStartQueue(queueNo, ifce.LinkInterface, Forward)
+		if err := rm.AddRule("filter", "FORWARD", []string{"-i", ifce.Name, "-j", "NFQUEUE", "--queue-num", strconv.Itoa(int(queueNo))}); err != nil {
+			log.Fatalf("Failed to set iptables rule for downlink forward: %v", err)
 		}
+		queueNo++
+
+		createAndStartQueue(queueNo, ifce.LinkInterface, Input)
+		if err := rm.AddRule("filter", "INPUT", []string{"-i", ifce.Name, "-p", "udp", "--dport", "55847", "-j", "NFQUEUE", "--queue-num", strconv.Itoa(int(queueNo))}); err != nil {
+			log.Fatalf("Failed to set iptables rule for downlink input: %v", err)
+		}
+		queueNo++
 	}
 }

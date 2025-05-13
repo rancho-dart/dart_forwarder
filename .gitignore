@@ -4,6 +4,8 @@ dart_forwarder
 *.yaml
 *.pcap
 *.db
+*.bak
+
 
 # Ignore Lingma cache
 .lingma

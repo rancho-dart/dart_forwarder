@@ -7,7 +7,7 @@
             "request": "launch",
             "mode": "debug",
             "program": "${workspaceFolder}",
-            "dlvFlags": ["--log-output="],  
+            "dlvFlags": ["--log-output=", "--check-go-version=false"],  
             "env": {
                 "GOPATH": "${workspaceFolder}/go"
             },

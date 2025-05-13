@@ -1,6 +1,7 @@
 {
   "explorer.excludeGitIgnore": false, 
   "files.exclude": {
-    "**/*.db": true
+    "**/*.db": true,
+    "**/*.bak": true
 },
 }
