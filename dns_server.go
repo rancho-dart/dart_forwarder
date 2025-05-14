@@ -12,6 +12,7 @@ import (
 
 const (
 	DART_GATEWAY_PREFIX = "dart-gateway."
+	DART_HOST_PREFIX    = "dart-host."
 )
 
 // DNSServer 结构体，用于管理 DNS 服务
@@ -46,7 +47,7 @@ func ResolveARecord(domain, dnsServer string, depth int) ([]net.IP, bool, error)
 	for _, ans := range resp.Answer {
 		// 如果cnameChain中不包含当前ans中的名称，则添加到cnameChain中
 		rrName := ans.Header().Name
-		if strings.HasPrefix(rrName, "dart-host.") || strings.HasPrefix(rrName, "dart-gateway.") {
+		if strings.HasPrefix(rrName, DART_HOST_PREFIX) || strings.HasPrefix(rrName, DART_GATEWAY_PREFIX) {
 			supportDart = true
 		}
 
@@ -488,12 +489,12 @@ func (s *DNSServer) respondWithDHCP(w dns.ResponseWriter, dnsMsg *dns.Msg, ifNam
 		// c1.sh.cn.               60      IN      CNAME   dart-host.c1.sh.cn.
 		// dart-host.c1.sh.cn.     60      IN      A       10.0.0.99
 
-		// c1.sh.cn is firstly resolved to a 'dart-host.' prefixed canme dart-host.c1.sh.cn, which means this host
+		// c1.sh.cn is firstly resolved to a 'dart-host.' prefixed cname dart-host.c1.sh.cn, which means this host
 		// supports DART protocol, then dart-host.c1.sh.cn is resolved to the IP address of the host
 
 		cname := &dns.CNAME{
 			Hdr:    dns.RR_Header{Name: domain, Rrtype: dns.TypeCNAME, Class: dns.ClassINET, Ttl: 60},
-			Target: fmt.Sprintf("dart-host.%s", domain),
+			Target: DART_HOST_PREFIX + domain,
 		}
 		m.Answer = append(m.Answer, cname)
 

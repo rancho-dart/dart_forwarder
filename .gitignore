@@ -1,6 +1,7 @@
 # Ignore binary files
 dart_forwarder
 
+*debug_bin*
 *.yaml
 *.pcap
 *.db

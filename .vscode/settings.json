@@ -4,6 +4,7 @@
     "**/*.db": false,
     "**/*.bak": true,
     "**/bin":true,
-    "**/go":true
+    "**/go":true,
+    "**/__debug*": true,
 },
 }
