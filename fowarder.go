@@ -82,7 +82,7 @@ func (fr *ForwardRoutine) processDownlinkInputPackets() {
 
 							// 调用 dnsServer.resolve() 获取目标 IP
 							// TODO: All packet inbound from downlink will be processed to uplink. thus, shouldn't call resolve, which is used to find downlink interface
-							outIfce, destIp, _ := dnsServer.resolve(string(dart.DstFqdn))
+							outIfce, destIp, _ := DNS_SERVER.Resolve(string(dart.DstFqdn))
 							if outIfce == nil || destIp == nil {
 								// 没有找到合适的转发接口或目标 IP，丢弃报文
 								packet.SetVerdict(netfilter.NF_DROP)
@@ -145,11 +145,11 @@ NextPacket:
 			}
 			fmt.Printf("Received packet: %s -> %s\n", ip.SrcIP, ip.DstIP)
 			// check whether the destip is pseudo ip
-			if !globalPseudoIpPool.IsPseudoIP(ip.DstIP) {
+			if !PSEUDO_POOL.IsPseudoIP(ip.DstIP) {
 				break
 			}
 
-			DstFqdn, DstIP, DstUdpPort, ok := globalPseudoIpPool.Lookup(ip.DstIP)
+			DstFqdn, DstIP, DstUdpPort, ok := PSEUDO_POOL.Lookup(ip.DstIP)
 			if !ok {
 				fmt.Printf("DstIP %s not found in pseudo ip pool\n", ip.DstIP)
 				continue NextPacket
@@ -289,7 +289,7 @@ NextPacket:
 			dart := dartLayer.(*DART)
 			fmt.Printf("Received dart packet: %s -> %s\n", dart.SrcFqdn, dart.DstFqdn)
 
-			outIfce, destIp, supportDart := dnsServer.resolve(string(dart.DstFqdn))
+			outIfce, destIp, supportDart := DNS_SERVER.Resolve(string(dart.DstFqdn))
 			if outIfce == nil || destIp == nil {
 				// 没找到合适的转发接口或目标IP
 				packet.SetVerdict(netfilter.NF_DROP)
@@ -305,7 +305,7 @@ NextPacket:
 			var err error
 			if supportDart {
 				// 更新 IP 地址
-				ip.SrcIP = outIfce.ipNet.IP
+				ip.SrcIP = outIfce.Addr()
 				ip.DstIP = destIp
 
 				// 重新构造 UDP 层，为计算校验和准备
@@ -319,7 +319,7 @@ NextPacket:
 				// 删除 DART 报头和UDP报头
 				ip.DstIP = destIp
 				srcFqdn := dns.Fqdn(string(dart.SrcFqdn)) // 有没有最后的"."有时候会变成问题。这里规格化一下。
-				ip.SrcIP = globalPseudoIpPool.FindOrAllocate(srcFqdn, ip.SrcIP, uint16(udp.SrcPort))
+				ip.SrcIP = PSEUDO_POOL.FindOrAllocate(srcFqdn, ip.SrcIP, uint16(udp.SrcPort))
 				// ip.SrcIP = outIfce.IPAddress[:]
 				ip.Protocol = dart.Protocol
 
@@ -362,7 +362,7 @@ NextPacket:
 
 			// hex_dump(buffer.Bytes())
 			// 从 outIfce 指定的端口发出报文
-			if err := fr.SendPacket(&outIfce.LinkInterface, destIp, buffer.Bytes()); err != nil {
+			if err := fr.SendPacket(outIfce, destIp, buffer.Bytes()); err != nil {
 				log.Printf("Failed to send packet: %v", err)
 			}
 

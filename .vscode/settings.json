@@ -1,7 +1,9 @@
 {
   "explorer.excludeGitIgnore": false, 
   "files.exclude": {
-    "**/*.db": true,
-    "**/*.bak": true
+    "**/*.db": false,
+    "**/*.bak": true,
+    "**/bin":true,
+    "**/go":true
 },
 }
