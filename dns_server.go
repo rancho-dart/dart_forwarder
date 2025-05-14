@@ -10,6 +10,10 @@ import (
 	"github.com/miekg/dns"
 )
 
+const (
+	DART_GATEWAY_PREFIX = "dart-gateway."
+)
+
 // DNSServer 结构体，用于管理 DNS 服务
 type DNSServer struct {
 	ports []int
@@ -310,7 +314,7 @@ func (s *DNSServer) ServerAQuery(w dns.ResponseWriter, r *dns.Msg, queriedDomain
 		case *UpLinkInterface:
 			s.RespondWithRefusal(w, r)
 		case *DownLinkInterface:
-			s.RespondWithDartGateway(w, r, queriedDomain, outLI.Domain, inLI.ipNet.IP)
+			s.RespondWithDartGateway(w, r, queriedDomain, outLI.Domain, inLI.ipNet.IP, true)
 		}
 		return
 	case *DownLinkInterface:
@@ -332,7 +336,7 @@ func (s *DNSServer) ServerAQuery(w dns.ResponseWriter, r *dns.Msg, queriedDomain
 
 			if queriedSupportDart {
 				if querierSupportDart {
-					s.RespondWithDartGateway(w, r, queriedDomain, inLI.Domain, inLI.ipNet.IP)
+					s.RespondWithDartGateway(w, r, queriedDomain, inLI.Domain, inLI.ipNet.IP, true)
 				} else {
 					// 这里需要传入已经查询到的真实地址以供分配伪地址
 					s.RespondWithPseudoIp(w, r, queriedDomain, ipInParentDomain)
@@ -346,10 +350,14 @@ func (s *DNSServer) ServerAQuery(w dns.ResponseWriter, r *dns.Msg, queriedDomain
 		case *DownLinkInterface:
 			if inLI.Name == outLI.Name {
 				// 同一子域内的主机互相查询，直接返回DHCP分配的IP地址
-				s.respondWithDHCP(w, r, inLI.Name, queriedDomain)
+				if strings.HasPrefix(queriedDomain, DART_GATEWAY_PREFIX) {
+					s.RespondWithDartGateway(w, r, queriedDomain, inLI.Domain, inLI.ipNet.IP, false)
+				} else {
+					s.respondWithDHCP(w, r, inLI.Name, queriedDomain)
+				}
 			} else {
 				// 这是两个子域之间的横向流量，我们直接返回网关地址。理论上直接交给操作系统转发也是可以的。所以我们返回入口网关地址
-				s.RespondWithDartGateway(w, r, queriedDomain, inLI.Domain, inLI.ipNet.IP)
+				s.RespondWithDartGateway(w, r, queriedDomain, inLI.Domain, inLI.ipNet.IP, true)
 			}
 			return
 		}
@@ -402,19 +410,23 @@ func (s *DNSServer) RespondWithPseudoIp(w dns.ResponseWriter, r *dns.Msg, domain
 	s.respondWithIP(w, r, domain, pseudoIp)
 }
 
-func (s *DNSServer) RespondWithDartGateway(w dns.ResponseWriter, r *dns.Msg, domain string, gwDomain string, gwIP net.IP) {
+func (s *DNSServer) RespondWithDartGateway(w dns.ResponseWriter, r *dns.Msg, domain string, gwDomain string, gwIP net.IP, withCName bool) {
 	m := new(dns.Msg)
 	m.SetReply(r)
 	m.Authoritative = true
 
-	cname := &dns.CNAME{
-		Hdr:    dns.RR_Header{Name: domain, Rrtype: dns.TypeCNAME, Class: dns.ClassINET, Ttl: 60},
-		Target: fmt.Sprintf("dart-gateway.%s", gwDomain),
+	AName := DART_GATEWAY_PREFIX + gwDomain
+
+	if withCName {
+		cname := &dns.CNAME{
+			Hdr:    dns.RR_Header{Name: domain, Rrtype: dns.TypeCNAME, Class: dns.ClassINET, Ttl: 60},
+			Target: AName,
+		}
+		m.Answer = append(m.Answer, cname)
 	}
-	m.Answer = append(m.Answer, cname)
 
 	a := &dns.A{
-		Hdr: dns.RR_Header{Name: cname.Target, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
+		Hdr: dns.RR_Header{Name: AName, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
 		A:   gwIP,
 	}
 	m.Answer = append(m.Answer, a)
