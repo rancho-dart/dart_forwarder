@@ -133,52 +133,170 @@ func (s *DNSServer) startServer(port int) {
 	}
 }
 
-func (s *DNSServer) AuthorityFor(domain string) bool {
+func (s *DNSServer) AuthorityFor(domain string) (isAuthority bool, isInSubdomain bool) {
 	for _, ifce := range CONFIG.Downlinks {
-		if ifce.Domain == domain {
-			return true
+		if strings.HasSuffix(domain, "."+ifce.Domain) {
+			if ifce.Domain == domain {
+				return true, false
+			} else {
+				return false, true
+			}
 		}
 	}
-	return false
+	return false, false
 }
 
 // ServeDNS 处理 DNS 查询
 func (s *DNSServer) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 
 	if r.Opcode == dns.OpcodeQuery && len(r.Question) > 0 {
-		QueriedDomain := dns.Fqdn(strings.ToLower(r.Question[0].Name))
+		queriedDomain := dns.Fqdn(strings.ToLower(r.Question[0].Name))
 
 		Qtype := r.Question[0].Qtype
 
-		if Qtype == dns.TypeA {
-			s.ServerAQuery(w, r, QueriedDomain)
+		clientIp, inboundIfce := s.getInboundInfo(w)
+		outboundIfce := s.getOutboundInfo(queriedDomain)
+
+		if outboundIfce == nil {
+			s.respondWithServerFailure(w, r)
 			return
 		}
 
-		if !(Qtype == dns.TypeSOA || Qtype == dns.TypeNS) {
-			s.RespondWithNotImplemented(w, r)
-			return
-		}
-
-		ParentInterfaceDomain := s.ParentInterfaceDomainOf(QueriedDomain) // 如果查询的域名在我的子域中，则返回子域的域名，否则返回空字符串
-		isAuthority := s.AuthorityFor(QueriedDomain)                      // 下行接口之一的域名等于QueriedDomain？
-
-		if isAuthority {
-			switch Qtype {
-			case dns.TypeSOA:
-				s.RespondWithSOA(w, r, QueriedDomain, true)
-			case dns.TypeNS:
-				s.RespondWithNS(w, r, QueriedDomain)
+		switch inLI := inboundIfce.Owner.(type) {
+		case *UpLinkInterface:
+			switch outLI := outboundIfce.Owner.(type) {
+			case *UpLinkInterface:
+				s.RespondWithRefusal(w, r) // 从父域查询父域的记录，理论上不会发给我。假如收到，一律拒绝。
+				return
+			case *DownLinkInterface:
+				switch Qtype {
+				case dns.TypeA:
+					s.RespondWithDartGateway(w, r, queriedDomain, outLI.Domain, inLI.ipNet.IP, true) // 从父域查询子域的A记录，一律以上联口的IP作答
+					return
+				case dns.TypeSOA:
+					s.RespondWithSOA(w, r, queriedDomain, true) // 从父域查询子域的SOA记录。一律回答“我就是该域的权威服务器”
+					return
+				case dns.TypeNS:
+					s.RespondWithNS(w, r, queriedDomain) // 从父域查询子域的NS记录。一律回答“我就是该域的名字服务器”
+					return
+				}
 			}
-		} else if ParentInterfaceDomain != "" {
-			s.RespondWithSOA(w, r, ParentInterfaceDomain, false)
-		} else {
-			s.RespondWithRefusal(w, r)
+		case *DownLinkInterface:
+			switch outLI := outboundIfce.Owner.(type) {
+			case *UpLinkInterface:
+				// 从子域查询父域的记录
+				querierSupportDart := false
+				if dhcpServer, ok := dhcpServers[inLI.Name]; ok { // 只有downlink接口才会开启DHCP SERVER
+					lease, ok := dhcpServer.leasesByIp[clientIp.String()] // 看看查询方是不是通过DHCP获取的地址
+					if ok && lease.DARTVersion == 1 {                     // 如果没记录，说明是静态配置IP的主机，默认其不支持DART；如果有分配记录，且DARTversion==0,还是不支持DART；
+						querierSupportDart = true
+					}
+				}
+
+				ipInParentDomain, queriedSupportDart := s.ResolveFromParentDNSServer(queriedDomain)
+				if ipInParentDomain == nil {
+					s.RespondWithNxdomain(w, r)
+					return
+				}
+
+				// 如果查询方和被查询方都支持DART，则本设备作为DART网关。如果查询的是A记录，返回入接口IP；如果查询的是SOA，本机是SOA；如果查询的是NS，本机是NS
+				if querierSupportDart && queriedSupportDart {
+					switch Qtype {
+					case dns.TypeA:
+						s.RespondWithDartGateway(w, r, queriedDomain, inLI.Domain, inLI.ipNet.IP, true)
+						return
+					case dns.TypeSOA:
+						s.RespondWithSOA(w, r, queriedDomain, true)
+						return
+					case dns.TypeNS:
+						s.RespondWithNS(w, r, queriedDomain)
+						return
+					}
+				}
+
+				// 如果查询方不支持DART但被查访方支持，那么以伪地址响应A记录查询，对于SOA和NS查询仍以本机响应
+				if !querierSupportDart && queriedSupportDart {
+					switch Qtype {
+					case dns.TypeA:
+						s.RespondWithPseudoIp(w, r, queriedDomain, ipInParentDomain)
+						return
+					case dns.TypeSOA:
+						s.RespondWithSOA(w, r, queriedDomain, true)
+						return
+					case dns.TypeNS:
+						s.RespondWithNS(w, r, queriedDomain)
+						return
+					}
+				}
+
+				// 如果被查询方不支持DART，则以真实地址作答，后面转发时会进行NAT44转换。对于SOA和NS查询当以父域的记录作答
+				if !queriedSupportDart {
+					switch Qtype {
+					case dns.TypeA:
+						s.respondWithIP(w, r, queriedDomain, ipInParentDomain)
+						return
+					case dns.TypeSOA:
+						s.RespondWithSOA(w, r, queriedDomain, true)
+						return
+					case dns.TypeNS:
+						s.RespondWithNS(w, r, queriedDomain)
+						return
+					}
+				}
+			case *DownLinkInterface:
+				// 这是子域查询子域的记录
+				switch Qtype {
+				case dns.TypeA:
+					if inLI.Name == outLI.Name {
+						// 同一子域内的主机互相查询，直接返回DHCP分配的IP地址
+						if strings.HasPrefix(queriedDomain, DART_GATEWAY_PREFIX) {
+							s.RespondWithDartGateway(w, r, queriedDomain, inLI.Domain, inLI.ipNet.IP, false)
+							return
+						} else {
+							s.respondWithDHCP(w, r, inLI.Name, queriedDomain)
+							return
+						}
+					} else {
+						// 这是两个子域之间的横向流量，我们直接返回网关地址。理论上直接交给操作系统转发也是可以的。所以我们返回入口网关地址
+						s.RespondWithDartGateway(w, r, queriedDomain, inLI.Domain, inLI.ipNet.IP, true)
+						return
+					}
+				case dns.TypeSOA:
+					fallthrough
+				case dns.TypeNS:
+					s.RespondWithForwardQuery(w, r)
+					return
+				}
+			}
 		}
-		return
 	}
 
 	s.RespondWithNotImplemented(w, r)
+}
+
+func forwardQuery(r *dns.Msg, upstream string) (*dns.Msg, error) {
+	c := new(dns.Client)
+	c.Net = "udp"
+	c.Timeout = 2 * time.Second
+
+	resp, _, err := c.Exchange(r, upstream+":53")
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
+}
+func (s *DNSServer) RespondWithForwardQuery(w dns.ResponseWriter, r *dns.Msg) {
+	for _, dnsServer := range CONFIG.Uplink.DNSServers {
+		resp, err := forwardQuery(r, dnsServer)
+		if err == nil {
+			// 将上游响应直接写回客户端
+			w.WriteMsg(resp)
+			return
+		}
+	}
+
+	log.Printf("Forward failed")
+	s.respondWithServerFailure(w, r)
 }
 
 func (s *DNSServer) ParentInterfaceDomainOf(queriedDomain string) string {
@@ -270,7 +388,7 @@ func (s *DNSServer) getInboundInfo(w dns.ResponseWriter) (clientIP net.IP, inbou
 	return clientIP, &CONFIG.Uplink.LinkInterface
 }
 
-func (s *DNSServer) ServerAQuery(w dns.ResponseWriter, r *dns.Msg, queriedDomain string) {
+func (s *DNSServer) serverAQuery(w dns.ResponseWriter, r *dns.Msg, queriedDomain string) {
 	// Mermaid Code:
 	// graph TD
 	// Start[开始查询] --> A{查询类型?}
@@ -305,7 +423,7 @@ func (s *DNSServer) ServerAQuery(w dns.ResponseWriter, r *dns.Msg, queriedDomain
 	outboundIfce := s.getOutboundInfo(queriedDomain)
 
 	if outboundIfce == nil {
-		s.RespondWithNxdomain(w, r)
+		s.respondWithServerFailure(w, r)
 		return
 	}
 
@@ -368,16 +486,16 @@ func (s *DNSServer) ServerAQuery(w dns.ResponseWriter, r *dns.Msg, queriedDomain
 
 // getOutboundInfo 找到与域名最长匹配的接口
 func (s *DNSServer) getOutboundInfo(domain string) *LinkInterface {
-	var BestMatch *DownLinkInterface
+	var Match *DownLinkInterface
 
 	for i, iface := range CONFIG.Downlinks {
-		if strings.HasSuffix(domain, iface.Domain) && (BestMatch == nil || len(iface.Domain) > len((BestMatch.Domain))) {
-			BestMatch = &CONFIG.Downlinks[i]
+		if strings.HasSuffix(domain, "."+iface.Domain) {
+			Match = &CONFIG.Downlinks[i]
 		}
 	}
 
-	if BestMatch != nil {
-		return &BestMatch.LinkInterface
+	if Match != nil {
+		return &Match.LinkInterface
 	} else {
 		return &CONFIG.Uplink.LinkInterface
 	}
