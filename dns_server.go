@@ -141,25 +141,25 @@ func (s *DNSServer) AuthorityFor(domain string) bool {
 func (s *DNSServer) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 
 	if r.Opcode == dns.OpcodeQuery && len(r.Question) > 0 {
-		queriedDomain := dns.Fqdn(strings.ToLower(r.Question[0].Name))
+		QueriedDomain := dns.Fqdn(strings.ToLower(r.Question[0].Name))
+		ParentDomain := s.ParentDomainOf(QueriedDomain)
+		if ParentDomain == "" && (r.Question[0].Qtype == dns.TypeSOA || r.Question[0].Qtype == dns.TypeNS) {
+			s.RespondWithRefusal(w, r)
+			return
+		}
 
 		switch r.Question[0].Qtype {
 		case dns.TypeA:
-			s.ServerAQuery(w, r)
+			s.ServerAQuery(w, r, QueriedDomain)
 			return
 		case dns.TypeSOA:
-			s.RespondWithSOA(w, r, queriedDomain, s.AuthorityFor(queriedDomain))
+			s.RespondWithSOA(w, r, QueriedDomain, s.AuthorityFor(QueriedDomain))
 			return
 		case dns.TypeNS:
-			if s.AuthorityFor(queriedDomain) {
-				s.RespondWithNS(w, r, queriedDomain)
+			if s.AuthorityFor(QueriedDomain) {
+				s.RespondWithNS(w, r, QueriedDomain)
 			} else {
-				Domain := s.ParentDomainOf(queriedDomain)
-				if Domain != "" {
-					s.RespondWithSOA(w, r, Domain, true)
-				} else {
-					s.RespondWithSOA(w, r, queriedDomain, false)
-				}
+				s.RespondWithSOA(w, r, ParentDomain, true)
 			}
 			return
 		}
@@ -257,7 +257,7 @@ func (s *DNSServer) getInboundInfo(w dns.ResponseWriter) (clientIP net.IP, inbou
 	return clientIP, &CONFIG.Uplink.LinkInterface
 }
 
-func (s *DNSServer) ServerAQuery(w dns.ResponseWriter, r *dns.Msg) {
+func (s *DNSServer) ServerAQuery(w dns.ResponseWriter, r *dns.Msg, queriedDomain string) {
 	// Mermaid Code:
 	// graph TD
 	// Start[开始查询] --> A{查询类型?}
@@ -287,7 +287,6 @@ func (s *DNSServer) ServerAQuery(w dns.ResponseWriter, r *dns.Msg) {
 	// 在DART协议中，每个子域都拥有完整的IPv4地址空间，因此这个接口可能收到来自任意地址的DNS Query报文
 	// 本程序只是一个技术验证，使用轻量级的DNS库，不能返回接收到DNS Query报文的物理接口
 	// 我们目前做一个简化设计，假设每个子域接口对应的是一个C类网段。我们比对发出报文的源地址和本机接口地址来推测接收到报文的接口
-	queriedDomain := dns.Fqdn(strings.ToLower(r.Question[0].Name))
 
 	clientIp, inboundIfce := s.getInboundInfo(w)
 	outboundIfce := s.getOutboundInfo(queriedDomain)
@@ -398,6 +397,7 @@ func (s *DNSServer) RespondWithPseudoIp(w dns.ResponseWriter, r *dns.Msg, domain
 func (s *DNSServer) RespondWithDartGateway(w dns.ResponseWriter, r *dns.Msg, domain string, gwDomain string, gwIP net.IP) {
 	m := new(dns.Msg)
 	m.SetReply(r)
+	m.Authoritative = true
 
 	cname := &dns.CNAME{
 		Hdr:    dns.RR_Header{Name: domain, Rrtype: dns.TypeCNAME, Class: dns.ClassINET, Ttl: 60},
@@ -425,6 +425,7 @@ func (s *DNSServer) RespondWithRefusal(w dns.ResponseWriter, r *dns.Msg) {
 func (s *DNSServer) RespondWithNxdomain(w dns.ResponseWriter, r *dns.Msg) {
 	m := new(dns.Msg)
 	m.SetReply(r)
+	m.Authoritative = true
 	m.Rcode = dns.RcodeNameError
 	w.WriteMsg(m)
 }
