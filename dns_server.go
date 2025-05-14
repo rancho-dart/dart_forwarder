@@ -142,33 +142,41 @@ func (s *DNSServer) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 
 	if r.Opcode == dns.OpcodeQuery && len(r.Question) > 0 {
 		QueriedDomain := dns.Fqdn(strings.ToLower(r.Question[0].Name))
-		ParentDomain := s.ParentDomainOf(QueriedDomain)
-		if ParentDomain == "" && (r.Question[0].Qtype == dns.TypeSOA || r.Question[0].Qtype == dns.TypeNS) {
-			s.RespondWithRefusal(w, r)
+
+		Qtype := r.Question[0].Qtype
+
+		if Qtype == dns.TypeA {
+			s.ServerAQuery(w, r, QueriedDomain)
 			return
 		}
 
-		switch r.Question[0].Qtype {
-		case dns.TypeA:
-			s.ServerAQuery(w, r, QueriedDomain)
-			return
-		case dns.TypeSOA:
-			s.RespondWithSOA(w, r, QueriedDomain, s.AuthorityFor(QueriedDomain))
-			return
-		case dns.TypeNS:
-			if s.AuthorityFor(QueriedDomain) {
-				s.RespondWithNS(w, r, QueriedDomain)
-			} else {
-				s.RespondWithSOA(w, r, ParentDomain, true)
-			}
+		if !(Qtype == dns.TypeSOA || Qtype == dns.TypeNS) {
+			s.RespondWithNotImplemented(w, r)
 			return
 		}
+
+		ParentInterfaceDomain := s.ParentInterfaceDomainOf(QueriedDomain) // 如果查询的域名在我的子域中，则返回子域的域名，否则返回空字符串
+		isAuthority := s.AuthorityFor(QueriedDomain)                      // 下行接口之一的域名等于QueriedDomain？
+
+		if isAuthority {
+			switch Qtype {
+			case dns.TypeSOA:
+				s.RespondWithSOA(w, r, QueriedDomain, true)
+			case dns.TypeNS:
+				s.RespondWithNS(w, r, QueriedDomain)
+			}
+		} else if ParentInterfaceDomain != "" {
+			s.RespondWithSOA(w, r, ParentInterfaceDomain, false)
+		} else {
+			s.RespondWithRefusal(w, r)
+		}
+		return
 	}
 
 	s.RespondWithNotImplemented(w, r)
 }
 
-func (s *DNSServer) ParentDomainOf(queriedDomain string) string {
+func (s *DNSServer) ParentInterfaceDomainOf(queriedDomain string) string {
 	for _, ifce := range CONFIG.Downlinks {
 		if strings.HasSuffix(queriedDomain, "."+ifce.Domain) {
 			return ifce.Domain
@@ -207,7 +215,7 @@ func (s *DNSServer) RespondWithNS(w dns.ResponseWriter, r *dns.Msg, domain strin
 	w.WriteMsg(m)
 }
 
-func (s *DNSServer) RespondWithSOA(w dns.ResponseWriter, r *dns.Msg, authorityDomain string, isAuthority bool) {
+func (s *DNSServer) RespondWithSOA(w dns.ResponseWriter, r *dns.Msg, authorityDomain string, isAnswer bool) {
 	m := new(dns.Msg)
 	m.SetReply(r)
 	m.Authoritative = true
@@ -228,7 +236,7 @@ func (s *DNSServer) RespondWithSOA(w dns.ResponseWriter, r *dns.Msg, authorityDo
 		Minttl:  3600,
 	}
 
-	if isAuthority {
+	if isAnswer {
 		m.Rcode = dns.RcodeSuccess
 		m.Answer = append(m.Answer, soa)
 	} else {
