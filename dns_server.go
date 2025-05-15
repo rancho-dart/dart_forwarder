@@ -199,49 +199,26 @@ func (s *DNSServer) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 					return
 				}
 
-				// 如果查询方和被查询方都支持DART，则本设备作为DART网关。如果查询的是A记录，返回入接口IP；如果查询的是SOA，本机是SOA；如果查询的是NS，本机是NS
-				if querierSupportDart && queriedSupportDart {
+				// 如果被查询方支持DART
+				if queriedSupportDart {
 					switch Qtype {
 					case dns.TypeA:
-						s.RespondWithDartGateway(w, r, queriedDomain, inLI.Domain, inLI.ipNet.IP, true)
+						if querierSupportDart {
+							s.RespondWithDartGateway(w, r, queriedDomain, inLI.Domain, inLI.ipNet.IP, true)
+						} else {
+							s.RespondWithPseudoIp(w, r, queriedDomain, ipInParentDomain)
+						}
 						return
-					case dns.TypeSOA:
-						s.RespondWithSOA(w, r, queriedDomain, true)
-						return
-					case dns.TypeNS:
-						s.RespondWithNS(w, r, queriedDomain)
-						return
-					}
-				}
-
-				// 如果查询方不支持DART但被查访方支持，那么以伪地址响应A记录查询，对于SOA和NS查询仍以本机响应
-				if !querierSupportDart && queriedSupportDart {
-					switch Qtype {
-					case dns.TypeA:
-						s.RespondWithPseudoIp(w, r, queriedDomain, ipInParentDomain)
-						return
-					case dns.TypeSOA:
-						s.RespondWithSOA(w, r, queriedDomain, true)
-						return
-					case dns.TypeNS:
-						s.RespondWithNS(w, r, queriedDomain)
+					default:
+						s.RespondWithCName(w, r, queriedDomain, inLI.Domain)
 						return
 					}
 				}
 
 				// 如果被查询方不支持DART，则以真实地址作答，后面转发时会进行NAT44转换。对于SOA和NS查询当以父域的记录作答
 				if !queriedSupportDart {
-					switch Qtype {
-					case dns.TypeA:
-						s.respondWithIP(w, r, queriedDomain, ipInParentDomain)
-						return
-					case dns.TypeSOA:
-						s.RespondWithSOA(w, r, queriedDomain, true)
-						return
-					case dns.TypeNS:
-						s.RespondWithNS(w, r, queriedDomain)
-						return
-					}
+					s.RespondWithForwardQuery(w, r)
+					return
 				}
 			case *DownLinkInterface:
 				// 这是子域查询子域的记录
@@ -252,6 +229,8 @@ func (s *DNSServer) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 						if strings.HasPrefix(queriedDomain, DART_GATEWAY_PREFIX) {
 							s.RespondWithDartGateway(w, r, queriedDomain, inLI.Domain, inLI.ipNet.IP, false)
 							return
+						} else if queriedDomain == inLI.Domain || queriedDomain == "ns."+inLI.Domain {
+							s.RespondWithDartGateway(w, r, queriedDomain, inLI.Domain, inLI.ipNet.IP, true)
 						} else {
 							s.respondWithDHCP(w, r, inLI.Name, queriedDomain)
 							return
@@ -262,9 +241,14 @@ func (s *DNSServer) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 						return
 					}
 				case dns.TypeSOA:
-					fallthrough
+					s.RespondWithSOA(w, r, queriedDomain, queriedDomain == outLI.Domain) // 从子域查询子域的SOA记录。一律回答“我就是该域的权威服务器”
+					return
 				case dns.TypeNS:
-					s.RespondWithForwardQuery(w, r)
+					if queriedDomain == outLI.Domain {
+						s.RespondWithNS(w, r, queriedDomain)
+					} else {
+						s.RespondWithSOA(w, r, queriedDomain, false)
+					}
 					return
 				}
 			}
@@ -272,6 +256,20 @@ func (s *DNSServer) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 	}
 
 	s.RespondWithNotImplemented(w, r)
+}
+
+func (s *DNSServer) RespondWithCName(w dns.ResponseWriter, r *dns.Msg, queriedDomain string, domain string) {
+	m := new(dns.Msg)
+	m.SetReply(r)
+	m.Authoritative = true
+
+	cname := &dns.CNAME{
+		Hdr:    dns.RR_Header{Name: queriedDomain, Rrtype: dns.TypeCNAME, Class: dns.ClassINET, Ttl: 60},
+		Target: domain,
+	}
+	m.Answer = append(m.Answer, cname)
+
+	w.WriteMsg(m)
 }
 
 func forwardQuery(r *dns.Msg, upstream string) (*dns.Msg, error) {
@@ -489,7 +487,7 @@ func (s *DNSServer) getOutboundInfo(domain string) *LinkInterface {
 	var Match *DownLinkInterface
 
 	for i, iface := range CONFIG.Downlinks {
-		if strings.HasSuffix(domain, "."+iface.Domain) {
+		if strings.HasSuffix("."+domain, "."+iface.Domain) {
 			Match = &CONFIG.Downlinks[i]
 		}
 	}
