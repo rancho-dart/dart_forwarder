@@ -166,7 +166,7 @@ NextPacket:
 
 			server, ok := DHCP_SERVERS[fr.ifce.Name()]
 			if !ok || server == nil {
-				fmt.Printf("no DHCP server for interface %s\n", fr.ifce.Name)
+				fmt.Printf("no DHCP server for interface %s\n", fr.ifce.Name())
 				continue NextPacket
 			}
 
@@ -177,6 +177,15 @@ NextPacket:
 			}
 
 			SrcFqdn := lease.FQDN
+
+			if CONFIG.Uplink.DartDomain == "." {
+				// 如果父域的IPv4根域，那么对于没有注册到DNS系统的设备而言，自己放在DART头中的域名是无法解析为IP的
+				// 解决的办法是将自己的公网IP嵌入DART头的源地址中
+				// 我们用[]作为嵌入IP地址的标志。这两个符号不是合法的域名允许的字符，因此不会被DNS服务器接受为域名
+				// 也不应当将它发送到DNS服务器进行解析
+				ip := CONFIG.Uplink.PublicIP
+				SrcFqdn = fmt.Sprintf("%s[%d-%d-%d-%d]", SrcFqdn, ip[0], ip[1], ip[2], ip[3])
+			}
 
 			dart := &DART{
 				Version:    1,
