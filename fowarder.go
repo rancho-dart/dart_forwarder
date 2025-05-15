@@ -370,7 +370,7 @@ NextPacket:
 			} else { // dest host doesn't support DART
 				// 删除 DART 报头和UDP报头
 				ip.DstIP = destIp
-				srcFqdn := dns.Fqdn(string(dart.SrcFqdn)) // 有没有最后的"."有时候会变成问题。这里规格化一下。
+				srcFqdn := dns.Fqdn(trimIpSuffix(string(dart.SrcFqdn))) // 有没有最后的"."有时候会变成问题。这里规格化一下。
 				ip.SrcIP = PSEUDO_POOL.FindOrAllocate(srcFqdn, ip.SrcIP, uint16(udp.SrcPort))
 				// ip.SrcIP = outIfce.IPAddress[:]
 				ip.Protocol = dart.Protocol
