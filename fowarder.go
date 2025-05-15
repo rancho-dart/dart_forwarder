@@ -78,7 +78,7 @@ func (fr *ForwardRoutine) processDownlinkInputPackets() {
 		ipLayer := packet.Packet.Layer(layers.LayerTypeIPv4)
 		if ipLayer != nil {
 			ip := ipLayer.(*layers.IPv4)
-			fmt.Printf("Received packet: %s -> %s\n", ip.SrcIP, ip.DstIP)
+			fmt.Printf("[Downlink INPUT] Received packet: %s -> %s\n", ip.SrcIP, ip.DstIP)
 
 			// 检查是否为 UDP 报文且目标端口为 DART 端口
 			if ip.Protocol == layers.IPProtocolUDP {
@@ -90,7 +90,7 @@ func (fr *ForwardRoutine) processDownlinkInputPackets() {
 						dartLayer := packet.Packet.Layer(LayerTypeDART)
 						if dartLayer != nil {
 							dart := dartLayer.(*DART)
-							fmt.Printf("Received DART packet: %s -> %s\n", dart.SrcFqdn, dart.DstFqdn)
+							fmt.Printf("[Downlink INPUT] Received DART packet: %s -> %s\n", dart.SrcFqdn, dart.DstFqdn)
 
 							// 调用 dnsServer.resolve() 获取目标 IP
 							// TODO: All packet inbound from downlink will be processed to uplink. thus, shouldn't call resolve, which is used to find downlink interface
@@ -114,14 +114,14 @@ func (fr *ForwardRoutine) processDownlinkInputPackets() {
 							}
 							err := gopacket.SerializeLayers(buffer, opts, ip, udp, dart, gopacket.Payload(dart.Payload))
 							if err != nil {
-								log.Printf("Failed to serialize packet: %v", err)
+								log.Printf("[Downlink INPUT] Failed to serialize packet: %v", err)
 								packet.SetVerdict(netfilter.NF_DROP)
 								continue
 							}
 
 							// 从上行接口发出修改后的报文
 							if err := fr.SendPacket(&CONFIG.Uplink.LinkInterface, destIp, buffer.Bytes()); err != nil {
-								log.Printf("Failed to send packet: %v", err)
+								log.Printf("[Downlink INPUT] Failed to send packet: %v", err)
 							}
 
 							// 丢弃原始报文
@@ -154,7 +154,7 @@ NextPacket:
 			if ip == nil {
 				break
 			}
-			fmt.Printf("Received packet: %s -> %s\n", ip.SrcIP, ip.DstIP)
+			fmt.Printf("[Downlink FORWARD] Received packet: %s -> %s\n", ip.SrcIP, ip.DstIP)
 			// check whether the destip is pseudo ip
 			if !PSEUDO_POOL.IsPseudoIP(ip.DstIP) {
 				break
@@ -162,7 +162,7 @@ NextPacket:
 
 			DstFqdn, DstIP, DstUdpPort, ok := PSEUDO_POOL.Lookup(ip.DstIP)
 			if !ok {
-				fmt.Printf("DstIP %s not found in pseudo ip pool\n", ip.DstIP)
+				fmt.Printf("[Downlink FORWARD] DstIP %s not found in pseudo ip pool\n", ip.DstIP)
 				continue NextPacket
 			}
 
@@ -170,13 +170,13 @@ NextPacket:
 
 			server, ok := DHCP_SERVERS[fr.ifce.Name()]
 			if !ok || server == nil {
-				fmt.Printf("no DHCP server for interface %s\n", fr.ifce.Name())
+				fmt.Printf("[Downlink FORWARD] no DHCP server for interface %s\n", fr.ifce.Name())
 				continue NextPacket
 			}
 
 			lease, ok := server.leasesByIp[ip.SrcIP.String()]
 			if !ok {
-				fmt.Printf("no lease for IP %s\n", ip.SrcIP)
+				fmt.Printf("[Downlink FORWARD] no lease for IP %s\n", ip.SrcIP)
 				continue NextPacket
 			}
 
@@ -222,7 +222,7 @@ NextPacket:
 			err := gopacket.SerializeLayers(buffer, opts, &newIp, udp, dart, gopacket.Payload(dart.Payload))
 
 			if err != nil {
-				log.Printf("Failed to serialize packet: %v", err)
+				log.Printf("[Downlink FORWARD] Failed to serialize packet: %v", err)
 				packet.SetVerdict(netfilter.NF_DROP)
 				continue NextPacket
 			}
@@ -254,15 +254,15 @@ NextPacket:
 				}
 				err := gopacket.SerializeLayers(buffer, opts, pkt_ip, pkt_icmp, pkt_payload)
 				if err != nil {
-					log.Printf("Failed to serialize packet: %v", err)
+					log.Printf("[Downlink FORWARD] Failed to serialize packet: %v", err)
 					packet.SetVerdict(netfilter.NF_DROP)
 					continue NextPacket
 				}
 
 				if err := fr.SendPacket(&fr.ifce, pkt_ip.DstIP, buffer.Bytes()); err != nil {
-					log.Printf("Failed to send packet: %v", err)
+					log.Printf("[Downlink FORWARD] Failed to send packet: %v", err)
 				}
-				log.Printf("ICMP packet too long replied to sender. Suggested MTU: %d", suggestMTU)
+				log.Printf("[Downlink FORWARD] ICMP packet too long replied to sender. Suggested MTU: %d", suggestMTU)
 
 				packet.SetVerdict(netfilter.NF_DROP)
 				continue NextPacket
@@ -270,7 +270,7 @@ NextPacket:
 
 			// hex_dump(buffer.Bytes())
 			if err := fr.SendPacket(&CONFIG.Uplink.LinkInterface, ip.DstIP, buffer.Bytes()); err != nil {
-				log.Printf("Failed to send packet: %v", err)
+				log.Printf("[Downlink FORWARD] Failed to send packet: %v", err)
 				// if err msg == 'message too long', we send a ICMP package (ICMP Type 3 Code 4 ) back to src
 				if strings.Contains(err.Error(), "message too long") {
 					continue NextPacket
@@ -310,7 +310,7 @@ NextPacket:
 			}
 
 			ip := ipLayer.(*layers.IPv4)
-			fmt.Printf("Received packet: %s -> %s\n", ip.SrcIP, ip.DstIP)
+			fmt.Printf("[Uplink INPUT] Received packet: %s -> %s\n", ip.SrcIP, ip.DstIP)
 
 			// check whether it is udp
 			if ip.Protocol != layers.IPProtocolUDP {
@@ -323,7 +323,7 @@ NextPacket:
 			}
 
 			udp := udpLayer.(*layers.UDP)
-			fmt.Printf("Received udp packet: %s -> %s\n", udp.SrcPort, udp.DstPort)
+			fmt.Printf("[Uplink INPUT] Received udp packet: %s -> %s\n", udp.SrcPort, udp.DstPort)
 			if udp.DstPort != DARTPort {
 				break
 			}
@@ -339,7 +339,7 @@ NextPacket:
 			// We need to check it. If the last part is a ip address, we need to remove it.
 			// 我们将DstFqdn中从第一个"["开始的部分全部删除
 			DstFqdn := dns.Fqdn(trimIpSuffix(string(dart.DstFqdn)))
-			fmt.Printf("Received dart packet: %s -> %s\n", dart.SrcFqdn, DstFqdn)
+			fmt.Printf("[Uplink INPUT] Received dart packet: %s -> %s\n", dart.SrcFqdn, DstFqdn)
 
 			outIfce, destIp, supportDart := DNS_SERVER.Resolve(DstFqdn)
 			if outIfce == nil || destIp == nil {
@@ -402,12 +402,12 @@ NextPacket:
 							ip, icmp, gopacket.Payload(icmp.Payload)) // 此函数会重新计算icmp的checksum
 					}
 				default:
-					err = errors.New("unsupported protocol in dart payload")
+					err = errors.New("[Uplink INPUT] unsupported protocol in dart payload")
 				}
 			} // dest host doesn't support DART. logic ends here
 
 			if err != nil {
-				log.Printf("Failed to serialize packet: %v", err)
+				log.Printf("[Uplink INPUT] Failed to serialize packet: %v", err)
 				packet.SetVerdict(netfilter.NF_DROP)
 				continue NextPacket
 			}
@@ -415,7 +415,7 @@ NextPacket:
 			// hex_dump(buffer.Bytes())
 			// 从 outIfce 指定的端口发出报文
 			if err := fr.SendPacket(outIfce, destIp, buffer.Bytes()); err != nil {
-				log.Printf("Failed to send packet: %v", err)
+				log.Printf("[Uplink INPUT] Failed to send packet: %v", err)
 			}
 
 			// 报文已经改造后从另一个端口发出了。当前报文直接 Drop
