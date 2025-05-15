@@ -23,6 +23,10 @@ const (
 	Output
 )
 
+const (
+	MTU = 1500
+)
+
 func (s QueueStyle) String() string {
 	return [...]string{"Input", "Forward", "Output"}[s]
 }
@@ -60,7 +64,7 @@ func (fr *ForwardRoutine) SendPacket(ifce *LinkInterface, DstIP net.IP, packet [
 	// Send packet out from interface ifce. packet shoud start from ip header
 	fmt.Printf("Send packet out of %s to %s\n", ifce.Name(), DstIP)
 
-	hex_dump(packet)
+	// hex_dump(packet)
 
 	addr := syscall.SockaddrInet4{}
 	copy(addr.Addr[:], DstIP.To4())
@@ -203,18 +207,19 @@ NextPacket:
 				Length:  uint16(len(dart.Payload)) + uint16(dart.HeaderLen()) + 8, // UDP 头长度为 8 字节
 			}
 
-			ip.SrcIP = CONFIG.Uplink.ipNet.IP
-			ip.DstIP = DstIP
-			ip.Protocol = layers.IPProtocolUDP
+			newIp := *ip
+			newIp.SrcIP = CONFIG.Uplink.ipNet.IP
+			newIp.DstIP = DstIP
+			newIp.Protocol = layers.IPProtocolUDP
 
-			udp.SetNetworkLayerForChecksum(ip)
+			udp.SetNetworkLayerForChecksum(&newIp)
 
 			buffer := gopacket.NewSerializeBuffer()
 			opts := gopacket.SerializeOptions{
 				FixLengths:       true,
 				ComputeChecksums: true,
 			}
-			err := gopacket.SerializeLayers(buffer, opts, ip, udp, dart, gopacket.Payload(dart.Payload))
+			err := gopacket.SerializeLayers(buffer, opts, &newIp, udp, dart, gopacket.Payload(dart.Payload))
 
 			if err != nil {
 				log.Printf("Failed to serialize packet: %v", err)
@@ -222,34 +227,54 @@ NextPacket:
 				continue NextPacket
 			}
 
-			hex_dump(buffer.Bytes())
+			packetLen := len(buffer.Bytes())
+			if packetLen > MTU {
+				pkt_ip := &layers.IPv4{
+					Version:  4,
+					TTL:      64,
+					Id:       0,
+					Protocol: layers.IPProtocolICMPv4,
+					SrcIP:    ip.DstIP,
+					DstIP:    ip.SrcIP,
+				}
+				suggestMTU := MTU - (packetLen - MTU)
+				pkt_icmp := &layers.ICMPv4{
+					TypeCode: layers.ICMPv4TypeDestinationUnreachable<<8 | layers.ICMPv4CodeFragmentationNeeded,
+					Id:       0,
+					Seq:      uint16(suggestMTU),
+				}
+
+				pkt_payload := gopacket.Payload(ip.Contents[:28])
+
+				// icmp.SetNetworkLayerForChecksum(ip)
+				buffer := gopacket.NewSerializeBuffer()
+				opts := gopacket.SerializeOptions{
+					FixLengths:       true,
+					ComputeChecksums: true,
+				}
+				err := gopacket.SerializeLayers(buffer, opts, pkt_ip, pkt_icmp, pkt_payload)
+				if err != nil {
+					log.Printf("Failed to serialize packet: %v", err)
+					packet.SetVerdict(netfilter.NF_DROP)
+					continue NextPacket
+				}
+
+				if err := fr.SendPacket(&fr.ifce, pkt_ip.DstIP, buffer.Bytes()); err != nil {
+					log.Printf("Failed to send packet: %v", err)
+				}
+				log.Printf("ICMP packet too long replied to sender. Suggested MTU: %d", suggestMTU)
+
+				packet.SetVerdict(netfilter.NF_DROP)
+				continue NextPacket
+			}
+
+			// hex_dump(buffer.Bytes())
 			if err := fr.SendPacket(&CONFIG.Uplink.LinkInterface, ip.DstIP, buffer.Bytes()); err != nil {
 				log.Printf("Failed to send packet: %v", err)
 				// if err msg == 'message too long', we send a ICMP package (ICMP Type 3 Code 4 ) back to src
-				// if strings.Contains(err.Error(), "message too long") {
-				// 	ip := packet.Packet.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
-				// 	icmp := &layers.ICMPv4{
-				// 		TypeCode: layers.ICMPv4TypeDestinationUnreachable<<8 | layers.ICMPv4CodeFragmentationNeeded,
-				// 		Id:       0,
-				// 		Seq:      0,
-				// 	}
-				// 	icmp.SetNetworkLayerForChecksum(ip)
-				// 	buffer := gopacket.NewSerializeBuffer()
-				// 	opts := gopacket.SerializeOptions{
-				// 		FixLengths:       true,
-				// 		ComputeChecksums: true,
-				// 	}
-				// 	err := gopacket.SerializeLayers(buffer, opts, icmp)
-				// 	if err != nil {
-				// 		log.Printf("Failed to serialize packet: %v", err)
-				// 		packet.SetVerdict(netfilter.NF_DROP)
-				// 		continue NextPacket
-				// 	}
-				// 	if err := fr.SendPacket(&globalCONFIG.UplinkConfig, ip.SrcIP, buffer.Bytes()); err != nil {
-				// 		log.Printf("Failed to send packet: %v", err)
-				// 	}
-				// 	continue NextPacket
-				// }
+				if strings.Contains(err.Error(), "message too long") {
+					continue NextPacket
+				}
 			}
 
 			packet.SetVerdict(netfilter.NF_DROP)
@@ -261,6 +286,12 @@ NextPacket:
 	} // Packet loop
 }
 
+func trimIpSuffix(s string) string {
+	if i := strings.Index(s, "["); i != -1 {
+		return s[:i]
+	}
+	return s
+}
 func (fr *ForwardRoutine) processUplinkInputPackets() {
 	// 这里处理来自CONFIG.Uplink的报文
 	// 从这个接口进来的报文，只有DART封装的需要转发，其他的都透明通过
@@ -303,7 +334,11 @@ NextPacket:
 			}
 
 			dart := dartLayer.(*DART)
-			DstFqdn := dns.Fqdn(string(dart.DstFqdn))
+
+			// Now the DstFqdn may looks like c1.sh.cn.[192-168-2.100]
+			// We need to check it. If the last part is a ip address, we need to remove it.
+			// 我们将DstFqdn中从第一个"["开始的部分全部删除
+			DstFqdn := dns.Fqdn(trimIpSuffix(string(dart.DstFqdn)))
 			fmt.Printf("Received dart packet: %s -> %s\n", dart.SrcFqdn, DstFqdn)
 
 			outIfce, destIp, supportDart := DNS_SERVER.Resolve(DstFqdn)
