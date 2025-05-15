@@ -138,6 +138,42 @@ func (fr *ForwardRoutine) processDownlinkInputPackets() {
 	}
 }
 
+func (fr *ForwardRoutine) handleExceededMTU(packetLen int, ipOfLongPkt *layers.IPv4) error {
+	ip := &layers.IPv4{
+		Version:  4,
+		TTL:      64,
+		Id:       0,
+		Protocol: layers.IPProtocolICMPv4,
+		SrcIP:    ipOfLongPkt.DstIP,
+		DstIP:    ipOfLongPkt.SrcIP,
+	}
+	suggestMTU := MTU - (packetLen - MTU)
+	icmp := &layers.ICMPv4{
+		TypeCode: layers.ICMPv4TypeDestinationUnreachable<<8 | layers.ICMPv4CodeFragmentationNeeded,
+		Id:       0,
+		Seq:      uint16(suggestMTU),
+	}
+
+	icmp_payload := gopacket.Payload(ipOfLongPkt.Contents[:28])
+
+	buff := gopacket.NewSerializeBuffer()
+	opts := gopacket.SerializeOptions{
+		FixLengths:       true,
+		ComputeChecksums: true,
+	}
+
+	err := gopacket.SerializeLayers(buff, opts, ip, icmp, icmp_payload)
+	if err != nil {
+		return err
+	}
+
+	if err := fr.SendPacket(&fr.ifce, ip.DstIP, buff.Bytes()); err != nil {
+		return err
+	}
+
+	log.Printf("[Downlink FORWARD] ICMP packet too long replied to sender. Suggested MTU: %d", suggestMTU)
+	return nil
+}
 func (fr *ForwardRoutine) processDownlinkForwardPackets() {
 	// 这里处理来自downlink发往伪地址的报文。因为是发往伪地址，这些报文会进入FORWARD队列。报文的去向，必须是CONFIG.Uplink方向（目前我们
 	// 只实现这个）。这些报文进来的时候没有DART封装，我们要根据伪地址查出目标主机的FQDN和真实IP（也没有那么真实，其实是上联接口所
@@ -163,6 +199,7 @@ NextPacket:
 			DstFqdn, DstIP, DstUdpPort, ok := PSEUDO_POOL.Lookup(ip.DstIP)
 			if !ok {
 				fmt.Printf("[Downlink FORWARD] DstIP %s not found in pseudo ip pool\n", ip.DstIP)
+				packet.SetVerdict(netfilter.NF_DROP)
 				continue NextPacket
 			}
 
@@ -171,24 +208,29 @@ NextPacket:
 			server, ok := DHCP_SERVERS[fr.ifce.Name()]
 			if !ok || server == nil {
 				fmt.Printf("[Downlink FORWARD] no DHCP server for interface %s\n", fr.ifce.Name())
+				packet.SetVerdict(netfilter.NF_DROP)
 				continue NextPacket
 			}
 
 			lease, ok := server.leasesByIp[ip.SrcIP.String()]
 			if !ok {
 				fmt.Printf("[Downlink FORWARD] no lease for IP %s\n", ip.SrcIP)
+				packet.SetVerdict(netfilter.NF_DROP)
 				continue NextPacket
 			}
 
 			SrcFqdn := lease.FQDN
 
 			if CONFIG.Uplink.DartDomain == "." {
-				// 如果父域的IPv4根域，那么对于没有注册到DNS系统的设备而言，自己放在DART头中的域名是无法解析为IP的
-				// 解决的办法是将自己的公网IP嵌入DART头的源地址中
-				// 我们用[]作为嵌入IP地址的标志。这两个符号不是合法的域名允许的字符，因此不会被DNS服务器接受为域名
-				// 也不应当将它发送到DNS服务器进行解析
-				ip := CONFIG.Uplink.PublicIP
-				SrcFqdn = fmt.Sprintf("%s[%d-%d-%d-%d]", SrcFqdn, ip[0], ip[1], ip[2], ip[3])
+				inboundIfce := fr.ifce.Owner.(*DownLinkInterface)
+				if !inboundIfce.RegistedInUplinkDNS {
+					// 如果父域的IPv4根域，那么对于没有注册到DNS系统的设备而言，自己放在DART头中的域名是无法解析为IP的
+					// 解决的办法是将自己的公网IP嵌入DART头的源地址中
+					// 我们用[]作为嵌入IP地址的标志。这两个符号不是合法的域名允许的字符，因此不会被DNS服务器接受为域名
+					// 也不应当将它发送到DNS服务器进行解析
+					ip := CONFIG.Uplink.PublicIP
+					SrcFqdn = fmt.Sprintf("%s[%d-%d-%d-%d]", SrcFqdn, ip[0], ip[1], ip[2], ip[3])
+				}
 			}
 
 			dart := &DART{
@@ -228,42 +270,12 @@ NextPacket:
 			}
 
 			packetLen := len(buffer.Bytes())
+
 			if packetLen > MTU {
-				pkt_ip := &layers.IPv4{
-					Version:  4,
-					TTL:      64,
-					Id:       0,
-					Protocol: layers.IPProtocolICMPv4,
-					SrcIP:    ip.DstIP,
-					DstIP:    ip.SrcIP,
-				}
-				suggestMTU := MTU - (packetLen - MTU)
-				pkt_icmp := &layers.ICMPv4{
-					TypeCode: layers.ICMPv4TypeDestinationUnreachable<<8 | layers.ICMPv4CodeFragmentationNeeded,
-					Id:       0,
-					Seq:      uint16(suggestMTU),
-				}
-
-				pkt_payload := gopacket.Payload(ip.Contents[:28])
-
-				// icmp.SetNetworkLayerForChecksum(ip)
-				buffer := gopacket.NewSerializeBuffer()
-				opts := gopacket.SerializeOptions{
-					FixLengths:       true,
-					ComputeChecksums: true,
-				}
-				err := gopacket.SerializeLayers(buffer, opts, pkt_ip, pkt_icmp, pkt_payload)
+				err := fr.handleExceededMTU(packetLen, ip)
 				if err != nil {
-					log.Printf("[Downlink FORWARD] Failed to serialize packet: %v", err)
-					packet.SetVerdict(netfilter.NF_DROP)
-					continue NextPacket
+					log.Printf("[Downlink FORWARD] Failed to handle exceeded MTU: %v", err)
 				}
-
-				if err := fr.SendPacket(&fr.ifce, pkt_ip.DstIP, buffer.Bytes()); err != nil {
-					log.Printf("[Downlink FORWARD] Failed to send packet: %v", err)
-				}
-				log.Printf("[Downlink FORWARD] ICMP packet too long replied to sender. Suggested MTU: %d", suggestMTU)
-
 				packet.SetVerdict(netfilter.NF_DROP)
 				continue NextPacket
 			}
@@ -271,10 +283,6 @@ NextPacket:
 			// hex_dump(buffer.Bytes())
 			if err := fr.SendPacket(&CONFIG.Uplink.LinkInterface, ip.DstIP, buffer.Bytes()); err != nil {
 				log.Printf("[Downlink FORWARD] Failed to send packet: %v", err)
-				// if err msg == 'message too long', we send a ICMP package (ICMP Type 3 Code 4 ) back to src
-				if strings.Contains(err.Error(), "message too long") {
-					continue NextPacket
-				}
 			}
 
 			packet.SetVerdict(netfilter.NF_DROP)
