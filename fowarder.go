@@ -334,21 +334,21 @@ NextPacket:
 			}
 
 			dart := dartLayer.(*DART)
+			fmt.Printf("[Uplink INPUT] Received dart packet: %s -> %s\n", dart.SrcFqdn, dart.DstFqdn)
 
-			// Now the DstFqdn may looks like c1.sh.cn.[192-168-2.100]
+			// Now the dstFqdn may looks like c1.sh.cn.[192-168-2.100]
 			// We need to check it. If the last part is a ip address, we need to remove it.
-			// 我们将DstFqdn中从第一个"["开始的部分全部删除
-			DstFqdn := dns.Fqdn(trimIpSuffix(string(dart.DstFqdn)))
-			fmt.Printf("[Uplink INPUT] Received dart packet: %s -> %s\n", dart.SrcFqdn, DstFqdn)
+			dstFqdn := dns.Fqdn(trimIpSuffix(string(dart.DstFqdn)))
+			srcFqdn := dns.Fqdn(trimIpSuffix(string(dart.SrcFqdn)))
 
-			outIfce, destIp, supportDart := DNS_SERVER.Resolve(DstFqdn)
+			outIfce, destIp, supportDart := DNS_SERVER.Resolve(dstFqdn)
 			if outIfce == nil || destIp == nil {
 				// 没找到合适的转发接口或目标IP
 				packet.SetVerdict(netfilter.NF_DROP)
 				continue NextPacket
 			}
 
-			buffer := gopacket.NewSerializeBuffer()
+			buff := gopacket.NewSerializeBuffer()
 			opts := gopacket.SerializeOptions{
 				FixLengths:       true,
 				ComputeChecksums: true,
@@ -365,12 +365,11 @@ NextPacket:
 
 				// 重新序列化 IP + UDP + DART + 原始 Payload
 
-				err = gopacket.SerializeLayers(buffer, opts,
+				err = gopacket.SerializeLayers(buff, opts,
 					ip, udp, dart, gopacket.Payload(dart.Payload))
 			} else { // dest host doesn't support DART
 				// 删除 DART 报头和UDP报头
 				ip.DstIP = destIp
-				srcFqdn := dns.Fqdn(trimIpSuffix(string(dart.SrcFqdn))) // 有没有最后的"."有时候会变成问题。这里规格化一下。
 				ip.SrcIP = PSEUDO_POOL.FindOrAllocate(srcFqdn, ip.SrcIP, uint16(udp.SrcPort))
 				// ip.SrcIP = outIfce.IPAddress[:]
 				ip.Protocol = dart.Protocol
@@ -385,20 +384,20 @@ NextPacket:
 					if tcpLayer := packetData.Layer(layers.LayerTypeTCP); tcpLayer != nil {
 						tcp := tcpLayer.(*layers.TCP)
 						tcp.SetNetworkLayerForChecksum(ip)
-						err = gopacket.SerializeLayers(buffer, opts,
+						err = gopacket.SerializeLayers(buff, opts,
 							ip, tcp, gopacket.Payload(tcp.Payload))
 					}
 				case layers.IPProtocolUDP:
 					if udpLayer := packetData.Layer(layers.LayerTypeUDP); udpLayer != nil {
 						udp := udpLayer.(*layers.UDP)
 						udp.SetNetworkLayerForChecksum(ip)
-						err = gopacket.SerializeLayers(buffer, opts,
+						err = gopacket.SerializeLayers(buff, opts,
 							ip, udp, gopacket.Payload(udp.Payload))
 					}
 				case layers.IPProtocolICMPv4:
 					if icmpLayer := packetData.Layer(layers.LayerTypeICMPv4); icmpLayer != nil {
 						icmp := icmpLayer.(*layers.ICMPv4)
-						err = gopacket.SerializeLayers(buffer, opts,
+						err = gopacket.SerializeLayers(buff, opts,
 							ip, icmp, gopacket.Payload(icmp.Payload)) // 此函数会重新计算icmp的checksum
 					}
 				default:
@@ -414,7 +413,7 @@ NextPacket:
 
 			// hex_dump(buffer.Bytes())
 			// 从 outIfce 指定的端口发出报文
-			if err := fr.SendPacket(outIfce, destIp, buffer.Bytes()); err != nil {
+			if err := fr.SendPacket(outIfce, destIp, buff.Bytes()); err != nil {
 				log.Printf("[Uplink INPUT] Failed to send packet: %v", err)
 			}
 
