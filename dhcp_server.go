@@ -52,7 +52,7 @@ func IPToUint32(ip net.IP) uint32 {
 	return binary.BigEndian.Uint32(ipBytes)
 }
 
-var dhcpServers map[string]*DHCPServer = make(map[string]*DHCPServer)
+var DHCP_SERVERS map[string]*DHCPServer = make(map[string]*DHCPServer)
 
 func startDHCPServerModule() {
 	// 遍历globalConfig中的下行接口，启动DHCP服务
@@ -63,7 +63,7 @@ func startDHCPServerModule() {
 			if err != nil {
 				log.Fatalf("Error creating UDP listener for %s: %v", iface.Name, err)
 			}
-			dhcpServers[iface.Name] = server
+			DHCP_SERVERS[iface.Name] = server
 
 			go func(pc net.PacketConn, server *DHCPServer) {
 				fmt.Printf("DHCP server started on %s...\n", server.dlIfce.Name)

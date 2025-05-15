@@ -35,22 +35,30 @@ type ForwardRoutine struct {
 }
 
 func (fr *ForwardRoutine) Run() {
-	defer fr.queue.Close()
+	// defer fr.queue.Close()
 
-	if fr.ifce.Direction == Upwards {
+	switch fr.ifce.Owner.(type) {
+	case *UpLinkInterface:
+		log.Println("uplink input processing start")
 		fr.processUplinkInputPackets()
-	} else if fr.ifce.Direction == Downwards {
-		if fr.style == Input {
+		log.Println("uplink forward processing end")
+	case *DownLinkInterface:
+		switch fr.style {
+		case Input:
+			log.Println("downlink input processing start")
 			fr.processDownlinkInputPackets()
-		} else if fr.style == Forward {
+			log.Println("downlink input processing end")
+		case Forward:
+			log.Println("downlink forward processing start")
 			fr.processDownlinkForwardPackets()
+			log.Println("downlink forward processing end")
 		}
 	}
 }
 
 func (fr *ForwardRoutine) SendPacket(ifce *LinkInterface, DstIP net.IP, packet []byte) error {
 	// Send packet out from interface ifce. packet shoud start from ip header
-	fmt.Printf("Send packet out of %s to %s\n", ifce.Name, DstIP)
+	fmt.Printf("Send packet out of %s to %s\n", ifce.Name(), DstIP)
 
 	hex_dump(packet)
 
@@ -133,7 +141,6 @@ func (fr *ForwardRoutine) processDownlinkForwardPackets() {
 NextPacket:
 	for packet := range fr.queue.GetPackets() {
 		for range 1 {
-
 			ipLayer := packet.Packet.Layer(layers.LayerTypeIPv4)
 			if ipLayer == nil {
 				break
@@ -157,7 +164,7 @@ NextPacket:
 
 			DstFqdn = strings.TrimSuffix(DstFqdn, ".")
 
-			server, ok := dhcpServers[fr.ifce.Name()]
+			server, ok := DHCP_SERVERS[fr.ifce.Name()]
 			if !ok || server == nil {
 				fmt.Printf("no DHCP server for interface %s\n", fr.ifce.Name)
 				continue NextPacket
@@ -466,4 +473,6 @@ func startForwardModule() {
 		}
 		queueNo++
 	}
+
+	select {}
 }

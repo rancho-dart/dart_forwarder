@@ -76,7 +76,7 @@ func (s *DNSServer) ResolveFromParentDNSServer(fqdn string) (ip net.IP, supportD
 	for _, dnsServer := range CONFIG.Uplink.DNSServers {
 		IPAddresses, supportDart, err := ResolveARecord(fqdn, dnsServer, 0)
 		if err != nil {
-			log.Printf("Error resolving A record for %s: %v\n", fqdn, err)
+			log.Printf("Error resolving A record for %s: %v, try next dns server...\n", fqdn, err)
 			continue
 		} else if len(IPAddresses) == 0 {
 			log.Printf("No A records found for %s\n", fqdn)
@@ -94,7 +94,7 @@ func (s *DNSServer) Resolve(fqdn string) (outIfce *LinkInterface, ip net.IP, sup
 		return nil, nil, false
 	}
 
-	dhcpServer, ok := dhcpServers[outIfce.Name()]
+	dhcpServer, ok := DHCP_SERVERS[outIfce.Name()]
 	if !ok {
 		return nil, nil, false
 	}
@@ -174,10 +174,14 @@ func (s *DNSServer) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 					s.RespondWithDartGateway(w, r, queriedDomain, outLI.Domain, inLI.ipNet.IP, true) // 从父域查询子域的A记录，一律以上联口的IP作答
 					return
 				case dns.TypeSOA:
-					s.RespondWithSOA(w, r, queriedDomain, true) // 从父域查询子域的SOA记录。一律回答“我就是该域的权威服务器”
+					s.RespondWithSOA(w, r, queriedDomain, queriedDomain == outLI.Domain) // 从父域查询子域的SOA记录，假如是子域，则回答SOA记录
 					return
 				case dns.TypeNS:
-					s.RespondWithNS(w, r, queriedDomain) // 从父域查询子域的NS记录。一律回答“我就是该域的名字服务器”
+					if queriedDomain == outLI.Domain {
+						s.RespondWithNS(w, r, queriedDomain) // 从父域查询子域的NS记录。一律回答“我就是该域的名字服务器”
+					} else {
+						s.RespondWithSOA(w, r, queriedDomain, false)
+					}
 					return
 				}
 			}
@@ -186,7 +190,7 @@ func (s *DNSServer) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 			case *UpLinkInterface:
 				// 从子域查询父域的记录
 				querierSupportDart := false
-				if dhcpServer, ok := dhcpServers[inLI.Name]; ok { // 只有downlink接口才会开启DHCP SERVER
+				if dhcpServer, ok := DHCP_SERVERS[inLI.Name]; ok { // 只有downlink接口才会开启DHCP SERVER
 					lease, ok := dhcpServer.leasesByIp[clientIp.String()] // 看看查询方是不是通过DHCP获取的地址
 					if ok && lease.DARTVersion == 1 {                     // 如果没记录，说明是静态配置IP的主机，默认其不支持DART；如果有分配记录，且DARTversion==0,还是不支持DART；
 						querierSupportDart = true
@@ -213,10 +217,8 @@ func (s *DNSServer) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 						s.RespondWithCName(w, r, queriedDomain, inLI.Domain)
 						return
 					}
-				}
-
-				// 如果被查询方不支持DART，则以真实地址作答，后面转发时会进行NAT44转换。对于SOA和NS查询当以父域的记录作答
-				if !queriedSupportDart {
+				} else {
+					// 如果被查询方不支持DART，则以真实地址作答，后面转发时会进行NAT44转换。对于SOA和NS查询当以父域的记录作答
 					s.RespondWithForwardQuery(w, r)
 					return
 				}
@@ -438,7 +440,7 @@ func (s *DNSServer) serverAQuery(w dns.ResponseWriter, r *dns.Msg, queriedDomain
 		switch outLI := outboundIfce.Owner.(type) {
 		case *UpLinkInterface:
 			querierSupportDart := false
-			if dhcpServer, ok := dhcpServers[inLI.Name]; ok { // 只有downlink接口才会开启DHCP SERVER
+			if dhcpServer, ok := DHCP_SERVERS[inLI.Name]; ok { // 只有downlink接口才会开启DHCP SERVER
 				lease, ok := dhcpServer.leasesByIp[clientIp.String()] // 看看查询方是不是通过DHCP获取的地址
 				if ok && lease.DARTVersion == 1 {                     // 如果没记录，说明是静态配置IP的主机，默认其不支持DART；如果有分配记录，且DARTversion==0,还是不支持DART；
 					querierSupportDart = true
@@ -579,7 +581,7 @@ func (s *DNSServer) respondWithDHCP(w dns.ResponseWriter, dnsMsg *dns.Msg, ifNam
 	var ip net.IP
 	var supportDart bool
 
-	dhcpServer, ok := dhcpServers[ifName]
+	dhcpServer, ok := DHCP_SERVERS[ifName]
 	if !ok {
 		s.RespondWithRefusal(w, dnsMsg)
 		return

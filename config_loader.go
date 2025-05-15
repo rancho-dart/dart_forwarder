@@ -29,7 +29,7 @@ type StaticBinding struct {
 }
 
 type LinkInterface struct {
-	Direction LinkDirection
+	// Direction LinkDirection
 	// Name      string
 	// IP        net.IP
 	Owner interface{}
