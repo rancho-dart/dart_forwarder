@@ -303,9 +303,10 @@ NextPacket:
 			}
 
 			dart := dartLayer.(*DART)
-			fmt.Printf("Received dart packet: %s -> %s\n", dart.SrcFqdn, dart.DstFqdn)
+			DstFqdn := dns.Fqdn(string(dart.DstFqdn))
+			fmt.Printf("Received dart packet: %s -> %s\n", dart.SrcFqdn, DstFqdn)
 
-			outIfce, destIp, supportDart := DNS_SERVER.Resolve(string(dart.DstFqdn))
+			outIfce, destIp, supportDart := DNS_SERVER.Resolve(DstFqdn)
 			if outIfce == nil || destIp == nil {
 				// 没找到合适的转发接口或目标IP
 				packet.SetVerdict(netfilter.NF_DROP)
