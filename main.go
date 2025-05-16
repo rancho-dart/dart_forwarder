@@ -10,11 +10,24 @@ import (
 	_ "github.com/mattn/go-sqlite3" // 添加 SQLite 驱动的导入
 )
 
+const (
+	DhcpLeaseDB = "dhcp_leases.sqlite3"
+	DBdir       = "/var/lib/dart"
+)
+
 var globalDB *sql.DB // 新增全局变量，用于存储数据库连接
 
 func initDB() (*sql.DB, error) {
+	// 确保数据库文件所在的目录存在
+	if _, err := os.Stat(DBdir); os.IsNotExist(err) {
+		err := os.MkdirAll(DBdir, 0755)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	// 初始化数据库连接
-	db, errOpenDB := sql.Open("sqlite3", "./dhcp_leases.db")
+	db, errOpenDB := sql.Open("sqlite3", DBdir+"/"+DhcpLeaseDB)
 	if errOpenDB != nil {
 		return nil, errOpenDB
 	}

@@ -30,7 +30,7 @@
         {
         "label": "cleanup-iptables",
         "type": "shell",
-        "command": "iptables -F",
+        "command": "${workspaceFolder}/clear_all_rules.sh",
         "problemMatcher": [],
         "presentation": {
             "echo": true,

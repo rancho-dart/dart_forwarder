@@ -160,7 +160,7 @@ func LoadConfig() (*Config, error) {
 		// 将接口域名统一为小写
 		dl.Domain = dns.Fqdn(strings.ToLower(dl.Domain))
 
-		ip, supportDart := DNS_SERVER.ResolveFromParentDNSServer(dl.Domain)
+		ip, supportDart := DNS_SERVER.resolveFromParentDNSServer(dl.Domain)
 		if cfg.Uplink.DartDomain == "." {
 			if ip != nil {
 				if !ip.Equal(cfg.Uplink.PublicIP) {

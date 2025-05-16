@@ -94,7 +94,7 @@ func (fr *ForwardRoutine) processDownlinkInputPackets() {
 
 							// 调用 dnsServer.resolve() 获取目标 IP
 							// TODO: All packet inbound from downlink will be processed to uplink. thus, shouldn't call resolve, which is used to find downlink interface
-							outIfce, destIp, _ := DNS_SERVER.Resolve(string(dart.DstFqdn))
+							outIfce, destIp, _ := DNS_SERVER.resolve(string(dart.DstFqdn))
 							if outIfce == nil || destIp == nil {
 								// 没有找到合适的转发接口或目标 IP，丢弃报文
 								packet.SetVerdict(netfilter.NF_DROP)
@@ -349,7 +349,7 @@ NextPacket:
 			dstFqdn := dns.Fqdn(trimIpSuffix(string(dart.DstFqdn)))
 			srcFqdn := dns.Fqdn(trimIpSuffix(string(dart.SrcFqdn)))
 
-			outIfce, destIp, supportDart := DNS_SERVER.Resolve(dstFqdn)
+			outIfce, destIp, supportDart := DNS_SERVER.resolve(dstFqdn)
 			if outIfce == nil || destIp == nil {
 				// 没找到合适的转发接口或目标IP
 				packet.SetVerdict(netfilter.NF_DROP)
@@ -435,7 +435,7 @@ NextPacket:
 	}
 }
 
-func hex_dump(data []byte) {
+func Hex_dump(data []byte) {
 	for i, b := range data {
 		if i%16 == 0 {
 			if i != 0 {
