@@ -510,12 +510,15 @@ func startForwardModule() {
 
 	outIfce := CONFIG.Uplink.LinkInterface.Name()
 	for _, inLI := range CONFIG.Downlinks {
-		private_network := inLI.ipNet.String()
-		rm.AddRule("nat", "POSTROUTING", []string{"-o", outIfce, "-s", private_network, "-j", "MASQUERADE"})
+		// 检查下联口的地址是否是私网地址
+		if isPrivateIP(inLI.ipNet.IP) {
+			private_network := inLI.ipNet.String()
+			rm.AddRule("nat", "POSTROUTING", []string{"-o", outIfce, "-s", private_network, "-j", "MASQUERADE"})
 
-		// 默认ACCEPT的情况下，不加下面的两条规则，也能正常工作。加上这两条规则，不依赖默认配置
-		rm.AddRule("filter", "FORWARD", []string{"-i", inLI.Name, "-o", outIfce, "-s", private_network, "!", "-d", PSEUDO_IP_POOL, "-m", "conntrack", "--ctstate", "NEW,ESTABLISHED,RELATED", "-j", "ACCEPT"})
-		rm.AddRule("filter", "FORWARD", []string{"-o", inLI.Name, "-i", outIfce, "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"})
+			// 默认ACCEPT的情况下，不加下面的两条规则，也能正常工作。加上这两条规则，不依赖默认配置
+			rm.AddRule("filter", "FORWARD", []string{"-i", inLI.Name, "-o", outIfce, "-s", private_network, "!", "-d", PSEUDO_IP_POOL, "-m", "conntrack", "--ctstate", "NEW,ESTABLISHED,RELATED", "-j", "ACCEPT"})
+			rm.AddRule("filter", "FORWARD", []string{"-o", inLI.Name, "-i", outIfce, "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"})
+		}
 	}
 
 	// Add NFQUEUE rules
@@ -544,4 +547,23 @@ func startForwardModule() {
 	log.Println("Forward module started successfully on NFQUEUE...")
 
 	select {}
+}
+
+// isPrivateIP 检查IP地址是否是私网地址
+func isPrivateIP(ip net.IP) bool {
+	if ip4 := ip.To4(); ip4 != nil {
+		// 10.0.0.0/8
+		if ip4[0] == 10 {
+			return true
+		}
+		// 172.16.0.0/12
+		if ip4[0] == 172 && ip4[1] >= 16 && ip4[1] <= 31 {
+			return true
+		}
+		// 192.168.0.0/16
+		if ip4[0] == 192 && ip4[1] == 168 {
+			return true
+		}
+	}
+	return false
 }
