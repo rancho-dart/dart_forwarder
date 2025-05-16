@@ -9,9 +9,14 @@ package main
 
 import (
 	"encoding/binary"
+	"log"
 	"net"
 	"sync"
 	"time"
+)
+
+const (
+	PSEUDO_IP_POOL = "198.18.0.0/15"
 )
 
 type PseudoIpEntry struct {
@@ -23,8 +28,8 @@ type PseudoIpEntry struct {
 }
 
 type PseudoIpPool struct {
-	start     uint32
-	end       uint32
+	head      uint32
+	tail      uint32
 	next      uint32
 	ttl       time.Duration
 	domainMap map[string]*PseudoIpEntry
@@ -33,12 +38,17 @@ type PseudoIpPool struct {
 }
 
 func NewPseudoIpPool(ttl time.Duration) *PseudoIpPool {
-	start := ipToUint32(net.ParseIP("198.18.0.0"))
-	end := ipToUint32(net.ParseIP("198.19.255.255"))
+	_, ipNet, err := net.ParseCIDR(PSEUDO_IP_POOL)
+	if err != nil {
+		log.Panic("invalid PSEUDO_IP_POOL format")
+	}
+	head := ipToUint32(ipNet.IP)
+	mask := binary.BigEndian.Uint32(ipNet.Mask)
+	tail := head | ^mask
 	return &PseudoIpPool{
-		start:     start,
-		end:       end,
-		next:      start,
+		head:      head,
+		tail:      tail,
+		next:      head,
 		ttl:       ttl,
 		domainMap: make(map[string]*PseudoIpEntry),
 		ipMap:     make(map[uint32]*PseudoIpEntry),
@@ -59,8 +69,8 @@ func (p *PseudoIpPool) FindOrAllocate(domain string, realIP net.IP, udpport uint
 	}
 
 	// 分配新地址
-	for i := uint32(0); i <= p.end-p.start; i++ {
-		ipInt := p.start + ((p.next - p.start + i) % (p.end - p.start + 1))
+	for i := uint32(0); i <= p.tail-p.head; i++ {
+		ipInt := p.head + ((p.next - p.head + i) % (p.tail - p.head + 1))
 		if _, used := p.ipMap[ipInt]; !used {
 			pseudoIP := uint32ToIP(ipInt)
 			entry := &PseudoIpEntry{
@@ -91,9 +101,9 @@ func (p *PseudoIpPool) Lookup(ip net.IP) (domain string, realIP net.IP, udpPort 
 	return "", nil, 0, false
 }
 
-func (p *PseudoIpPool) IsPseudoIP(ip net.IP) bool {
+func (p *PseudoIpPool) isPseudoIP(ip net.IP) bool {
 	ipInt := ipToUint32(ip.To4())
-	return p.start <= ipInt && ipInt <= p.end
+	return p.head <= ipInt && ipInt <= p.tail
 }
 
 // 清理过期项

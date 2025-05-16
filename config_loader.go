@@ -22,6 +22,10 @@ const (
 	Downwards
 )
 
+const (
+	ConfigFile = "/etc/dartd.yaml"
+)
+
 // StaticBinding 表示静态 MAC-IP 绑定
 type StaticBinding struct {
 	MAC string `yaml:"mac"`

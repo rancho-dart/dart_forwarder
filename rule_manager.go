@@ -64,7 +64,7 @@ func (rm *RuleManager) CleanupOnSignal() {
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, syscall.SIGINT, syscall.SIGTERM)
 	<-c
-	fmt.Println()
+	log.Println()
 	rm.Cleanup()
 	log.Println("Exit.")
 	os.Exit(0)

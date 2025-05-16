@@ -2,7 +2,6 @@ package main
 
 import (
 	"database/sql"
-	"fmt"
 	"log"
 	"os"
 	"sync"
@@ -48,7 +47,7 @@ func main() {
 	var errDB error
 	globalDB, errDB = initDB()
 	if errDB != nil {
-		fmt.Printf("Error initializing database: %v\n", errDB)
+		log.Printf("Error initializing database: %v\n", errDB)
 		os.Exit(1)
 	}
 	defer globalDB.Close() // 程序退出时关闭数据库连接

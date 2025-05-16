@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/binary"
-	"fmt"
 	"strconv"
 	"strings"
 
@@ -66,7 +65,7 @@ func startDHCPServerModule() {
 			DHCP_SERVERS[iface.Name] = server
 
 			go func(pc net.PacketConn, server *DHCPServer) {
-				fmt.Printf("DHCP server started on %s...\n", server.dlIfce.Name)
+				log.Printf("DHCP server started on %s...\n", server.dlIfce.Name)
 				log.Fatal(dhcp4.Serve(pc, server))
 			}(pc, server)
 		}
@@ -251,7 +250,7 @@ func (s *DHCPServer) ServeDHCP(p dhcp4.Packet, msgType dhcp4.MessageType, option
 				}
 
 				// write to db
-				fmt.Printf("Writing to SQLite database: mac_address=%s, ip_address=%s, dart_version=%d, fqdn=%s, Expiry=%s\n", mac, reqIP.String(), dartVersion, fqdn, time.Now().Add(s.leaseDuration).Format(time.RFC3339))
+				log.Printf("Writing to SQLite database: mac_address=%s, ip_address=%s, dart_version=%d, fqdn=%s, Expiry=%s\n", mac, reqIP.String(), dartVersion, fqdn, time.Now().Add(s.leaseDuration).Format(time.RFC3339))
 				_, err := globalDB.Exec("INSERT OR REPLACE INTO dhcp_leases (mac_address, ip_address, dart_version, fqdn, Expiry) VALUES (?, ?, ?, ?, ?)",
 					mac, reqIP.String(), dartVersion, fqdn, time.Now().Add(s.leaseDuration).Format(time.RFC3339))
 				if err != nil {

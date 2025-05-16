@@ -14,7 +14,6 @@ const (
 	DNSPort         = 53
 	DHCPport        = 67
 	DARTPort        = 0xDA27 // DART 使用的端口号
-	ConfigFile      = "config.yaml"
 )
 
 type DART struct {

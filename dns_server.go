@@ -127,7 +127,7 @@ func (s *DNSServer) Start() {
 func (s *DNSServer) startServer(port int) {
 	server := &dns.Server{Addr: fmt.Sprintf(":%d", port), Net: "udp"}
 	server.Handler = s
-	fmt.Printf("DNS Server started on port %d\n", port)
+	log.Printf("DNS Server started on port %d\n", port)
 	if err := server.ListenAndServe(); err != nil {
 		log.Fatalf("Failed to start DNS server:[%v]\n", err)
 	}

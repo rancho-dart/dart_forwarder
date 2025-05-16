@@ -62,7 +62,7 @@ func (fr *ForwardRoutine) Run() {
 
 func (fr *ForwardRoutine) SendPacket(ifce *LinkInterface, DstIP net.IP, packet []byte) error {
 	// Send packet out from interface ifce. packet shoud start from ip header
-	fmt.Printf("Send packet out of %s to %s\n", ifce.Name(), DstIP)
+	log.Printf("Send packet out of %s to %s\n", ifce.Name(), DstIP)
 
 	// hex_dump(packet)
 
@@ -78,7 +78,7 @@ func (fr *ForwardRoutine) processDownlinkInputPackets() {
 		ipLayer := packet.Packet.Layer(layers.LayerTypeIPv4)
 		if ipLayer != nil {
 			ip := ipLayer.(*layers.IPv4)
-			fmt.Printf("[Downlink INPUT] Received packet: %s -> %s\n", ip.SrcIP, ip.DstIP)
+			log.Printf("[Downlink INPUT] Received packet: %s -> %s\n", ip.SrcIP, ip.DstIP)
 
 			// 检查是否为 UDP 报文且目标端口为 DART 端口
 			if ip.Protocol == layers.IPProtocolUDP {
@@ -90,7 +90,7 @@ func (fr *ForwardRoutine) processDownlinkInputPackets() {
 						dartLayer := packet.Packet.Layer(LayerTypeDART)
 						if dartLayer != nil {
 							dart := dartLayer.(*DART)
-							fmt.Printf("[Downlink INPUT] Received DART packet: %s -> %s\n", dart.SrcFqdn, dart.DstFqdn)
+							log.Printf("[Downlink INPUT] Received DART packet: %s -> %s\n", dart.SrcFqdn, dart.DstFqdn)
 
 							// 调用 dnsServer.resolve() 获取目标 IP
 							// TODO: All packet inbound from downlink will be processed to uplink. thus, shouldn't call resolve, which is used to find downlink interface
@@ -190,15 +190,15 @@ NextPacket:
 			if ip == nil {
 				break
 			}
-			fmt.Printf("[Downlink FORWARD] Received packet: %s -> %s\n", ip.SrcIP, ip.DstIP)
+			log.Printf("[Downlink FORWARD] Received packet: %s -> %s\n", ip.SrcIP, ip.DstIP)
 			// check whether the destip is pseudo ip
-			if !PSEUDO_POOL.IsPseudoIP(ip.DstIP) {
+			if !PSEUDO_POOL.isPseudoIP(ip.DstIP) {
 				break
 			}
 
 			DstFqdn, DstIP, DstUdpPort, ok := PSEUDO_POOL.Lookup(ip.DstIP)
 			if !ok {
-				fmt.Printf("[Downlink FORWARD] DstIP %s not found in pseudo ip pool\n", ip.DstIP)
+				log.Printf("[Downlink FORWARD] DstIP %s not found in pseudo ip pool\n", ip.DstIP)
 				packet.SetVerdict(netfilter.NF_DROP)
 				continue NextPacket
 			}
@@ -207,14 +207,14 @@ NextPacket:
 
 			server, ok := DHCP_SERVERS[fr.ifce.Name()]
 			if !ok || server == nil {
-				fmt.Printf("[Downlink FORWARD] no DHCP server for interface %s\n", fr.ifce.Name())
+				log.Printf("[Downlink FORWARD] no DHCP server for interface %s\n", fr.ifce.Name())
 				packet.SetVerdict(netfilter.NF_DROP)
 				continue NextPacket
 			}
 
 			lease, ok := server.leasesByIp[ip.SrcIP.String()]
 			if !ok {
-				fmt.Printf("[Downlink FORWARD] no lease for IP %s\n", ip.SrcIP)
+				log.Printf("[Downlink FORWARD] no lease for IP %s\n", ip.SrcIP)
 				packet.SetVerdict(netfilter.NF_DROP)
 				continue NextPacket
 			}
@@ -318,7 +318,7 @@ NextPacket:
 			}
 
 			ip := ipLayer.(*layers.IPv4)
-			fmt.Printf("[Uplink INPUT] Received packet: %s -> %s\n", ip.SrcIP, ip.DstIP)
+			log.Printf("[Uplink INPUT] Received packet: %s -> %s\n", ip.SrcIP, ip.DstIP)
 
 			// check whether it is udp
 			if ip.Protocol != layers.IPProtocolUDP {
@@ -331,7 +331,7 @@ NextPacket:
 			}
 
 			udp := udpLayer.(*layers.UDP)
-			fmt.Printf("[Uplink INPUT] Received udp packet: %s -> %s\n", udp.SrcPort, udp.DstPort)
+			log.Printf("[Uplink INPUT] Received udp packet: %s -> %s\n", udp.SrcPort, udp.DstPort)
 			if udp.DstPort != DARTPort {
 				break
 			}
@@ -342,7 +342,7 @@ NextPacket:
 			}
 
 			dart := dartLayer.(*DART)
-			fmt.Printf("[Uplink INPUT] Received dart packet: %s -> %s\n", dart.SrcFqdn, dart.DstFqdn)
+			log.Printf("[Uplink INPUT] Received dart packet: %s -> %s\n", dart.SrcFqdn, dart.DstFqdn)
 
 			// Now the dstFqdn may looks like c1.sh.cn.[192-168-2.100]
 			// We need to check it. If the last part is a ip address, we need to remove it.
@@ -502,8 +502,23 @@ func startForwardModule() {
 	rm := NewRuleManager()
 	go rm.CleanupOnSignal()
 
-	fmt.Println("Creating queues & iptable rules to capture packets...")
+	log.Println("Creating queues & iptable rules to capture packets...")
 
+	// Add NAT44 rules
+	rm.AddRule("nat", "POSTROUTING", []string{"-p", "udp", "--sport", " 55847", "-j", "RETURN"})
+	rm.AddRule("nat", "POSTROUTING", []string{"-p", "udp", "--dport", " 55847", "-j", "RETURN"})
+
+	outIfce := CONFIG.Uplink.LinkInterface.Name()
+	for _, inLI := range CONFIG.Downlinks {
+		private_network := inLI.ipNet.String()
+		rm.AddRule("nat", "POSTROUTING", []string{"-o", outIfce, "-s", private_network, "-j", "MASQUERADE"})
+
+		// 不加下面的两条规则，也能正常工作（？）
+		// rm.AddRule("filter", "FORWARD", []string{"-i", inLI.Name, "-o", outIfce, "-s", private_network, "!", "-d", PSEUDO_IP_POOL, "-m", "conntrack", "--ctstate", "NEW,ESTABLISHED,RELATED", "-j", "ACCEPT"})
+		// rm.AddRule("filter", "FORWARD", []string{"-o", inLI.Name, "-i", outIfce, "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"})
+	}
+
+	// Add NFQUEUE rules
 	var queueNo uint16 = 0
 
 	createAndStartQueue(queueNo, CONFIG.Uplink.LinkInterface, Input)
