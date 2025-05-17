@@ -14,6 +14,7 @@ import (
 	"github.com/krolaw/dhcp4"
 	"github.com/krolaw/dhcp4/conn"
 	_ "github.com/mattn/go-sqlite3" // 添加 SQLite 驱动的导入
+	"github.com/miekg/dns"
 )
 
 // startDHCPServerModule 启动 DHCP Server 模块
@@ -26,7 +27,7 @@ type DHCPServer struct {
 	leaseDuration time.Duration
 	leasesByIp    map[string]leaseInfo // key: IP string
 	leasesByFQDN  map[string]leaseInfo
-	staticLeases  map[string]string // key: MAC, value: IP
+	staticLeases  map[string]leaseInfo // key: MAC, value: leaseInfo
 }
 
 type leaseInfo struct {
@@ -98,9 +99,15 @@ func NewDHCPServer(dlIfce DownLinkInterface) *DHCPServer {
 	options[dhcp4.OptionDomainNameServer] = dlIfce.ipNet.IP
 
 	// 初始化静态租约
-	staticLeases := make(map[string]string)
+	staticLeases := make(map[string]leaseInfo)
 	for _, binding := range dlIfce.StaticBindings {
-		staticLeases[strings.ToLower(binding.MAC)] = binding.IP
+		staticLeases[strings.ToLower(binding.MAC)] = leaseInfo{
+			IP:          net.ParseIP(binding.IP).To4(),
+			MAC:         strings.ToLower(binding.MAC),
+			Expiry:      time.Now().Add(24 * time.Hour), // 静态租约默认24小时
+			FQDN:        binding.FQDN,
+			DARTVersion: binding.DARTVersion,
+		}
 	}
 
 	// 从数据库中加载租约信息
@@ -172,15 +179,39 @@ func TrimPrefixFold(s, prefix string) string {
 	return s
 }
 
+func TrimSuffixFold(s, suffix string) string {
+	if len(s) < len(suffix) {
+		return s
+	}
+	if strings.EqualFold(s[len(s)-len(suffix):], suffix) {
+		return s[:len(s)-len(suffix)]
+	}
+	return s
+}
+
+func (s *DHCPServer) generateFQDN(ip, requestedHostname string) (allocatedFQDN string) {
+	lease, ok := s.leasesByIp[ip]
+	if ok && lease.FQDN != "" {
+		return lease.FQDN
+	}
+
+	name := TrimSuffixFold(requestedHostname, "."+s.dlIfce.Domain)
+	if name == "" {
+		name = ip
+	}
+
+	name = strings.ReplaceAll(name, ".", "-") // replace dot with dash if any
+	return name + "." + s.dlIfce.Domain
+}
+
 func (s *DHCPServer) ServeDHCP(p dhcp4.Packet, msgType dhcp4.MessageType, options dhcp4.Options) dhcp4.Packet {
 	mac := strings.ToLower(p.CHAddr().String())
 
 	switch msgType {
 	case dhcp4.Discover:
 		// 检查静态绑定
-		if ip, ok := s.staticLeases[mac]; ok {
-			staticIP := net.ParseIP(ip).To4()
-			return dhcp4.ReplyPacket(p, dhcp4.Offer, s.dlIfce.ipNet.IP, staticIP, s.leaseDuration,
+		if lease, ok := s.staticLeases[mac]; ok {
+			return dhcp4.ReplyPacket(p, dhcp4.Offer, s.dlIfce.ipNet.IP, lease.IP, s.leaseDuration,
 				s.options.SelectOrderOrAll(options[dhcp4.OptionParameterRequestList]))
 		}
 
@@ -198,9 +229,9 @@ func (s *DHCPServer) ServeDHCP(p dhcp4.Packet, msgType dhcp4.MessageType, option
 		}
 
 		var reqIP net.IP
-		if ip, ok := s.staticLeases[mac]; ok {
+		if lease, ok := s.staticLeases[mac]; ok {
 			// 静态IP分配
-			reqIP = net.ParseIP(ip).To4()
+			reqIP = lease.IP
 		} else {
 			// 动态IP分配
 			reqIP = net.IP(options[dhcp4.OptionRequestedIPAddress])
@@ -209,55 +240,69 @@ func (s *DHCPServer) ServeDHCP(p dhcp4.Packet, msgType dhcp4.MessageType, option
 			}
 		}
 
-		var dartVersion int = 0
 		if reqIP != nil && !reqIP.Equal(net.IPv4zero) {
-			if s.isInPool(reqIP) || s.isInStaticLeases(mac, reqIP) {
+			var dartVersion int = 0
+			var fqdn string = ""
+			var fqdnResolved bool = false
+
+			lease, ok := s.staticLeases[mac]
+			if ok && reqIP.Equal(lease.IP) {
+				dartVersion = lease.DARTVersion
+				fqdn = lease.FQDN
+				fqdnResolved = fqdn != ""
+			}
+
+			if !fqdnResolved || s.isInPool(reqIP) {
 				if dartVersionBin, ok := options[224]; ok {
 					dartVersionStr := string(dartVersionBin)
 					if HasPrefixFold(dartVersionStr, "Dart:v") {
-						version := TrimPrefixFold(dartVersionStr, "Dart:v")
-						versionInt, err := strconv.Atoi(version)
-						if err == nil {
-							dartVersion = versionInt
-						}
+						versionStr := TrimPrefixFold(dartVersionStr, "Dart:v")
+						dartVersion, _ = strconv.Atoi(versionStr) // If error, returns 0
 					}
 				}
 
-				// 新增：获取FQDN
+				// 获取FQDN
 				hostname := ""
 				if fqdnBin, ok := options[dhcp4.OptionHostName]; ok {
 					hostname = string(fqdnBin)
 				}
 
-				domain := s.dlIfce.Domain
+				fqdn = s.generateFQDN(reqIP.String(), dns.Fqdn(hostname)) // Option hostname (if any) is used as the suggested hostname to generate FQDN
+			}
 
-				fqdn := hostname + "." + domain
+			if fqdn != "" {
+				// 通常DHCP客户端并不会采纳DHCP SERVER返回给它的HOSTNAME，但是我们可以将这个HOSTNAME存储在服务器上，
+				// 将来需要将客户机发来的IP报文转换成DART报文的时候可以使用这个FQDN
+				// 客户机如果想要知道服务器分配给它的FQDN是什么，可以通过DNS反查IP
 
-				s.leasesByIp[reqIP.String()] = leaseInfo{
-					IP:          reqIP,
-					MAC:         mac,
-					Expiry:      time.Now().Add(s.leaseDuration),
-					DARTVersion: dartVersion,
-					FQDN:        fqdn,
+				lease, ok := s.leasesByFQDN[fqdn]
+				if !ok || lease.IP.Equal(reqIP) {
+					s.leasesByIp[reqIP.String()] = leaseInfo{
+						IP:          reqIP,
+						MAC:         mac,
+						Expiry:      time.Now().Add(s.leaseDuration),
+						DARTVersion: dartVersion,
+						FQDN:        fqdn,
+					}
+
+					s.leasesByFQDN[fqdn] = leaseInfo{
+						IP:          reqIP,
+						MAC:         mac,
+						Expiry:      time.Now().Add(s.leaseDuration),
+						DARTVersion: dartVersion,
+						FQDN:        fqdn,
+					}
+
+					// write to db
+					log.Printf("Writing to db: mac=%s, ip=%s, dart_version=%d, fqdn=%s, Expiry=%s\n", mac, reqIP.String(), dartVersion, fqdn, time.Now().Add(s.leaseDuration).Format(time.RFC3339))
+					_, err := globalDB.Exec("INSERT OR REPLACE INTO dhcp_leases (mac_address, ip_address, dart_version, fqdn, Expiry) VALUES (?, ?, ?, ?, ?)",
+						mac, reqIP.String(), dartVersion, fqdn, time.Now().Add(s.leaseDuration).Format(time.RFC3339))
+					if err != nil {
+						log.Printf("Error writing to SQLite database: %v\n", err)
+					}
+					return dhcp4.ReplyPacket(p, dhcp4.ACK, s.dlIfce.ipNet.IP, reqIP, s.leaseDuration,
+						s.options.SelectOrderOrAll(options[dhcp4.OptionParameterRequestList]))
 				}
-
-				s.leasesByFQDN[fqdn] = leaseInfo{
-					IP:          reqIP,
-					MAC:         mac,
-					Expiry:      time.Now().Add(s.leaseDuration),
-					DARTVersion: dartVersion,
-					FQDN:        fqdn,
-				}
-
-				// write to db
-				log.Printf("Writing to SQLite database: mac_address=%s, ip_address=%s, dart_version=%d, fqdn=%s, Expiry=%s\n", mac, reqIP.String(), dartVersion, fqdn, time.Now().Add(s.leaseDuration).Format(time.RFC3339))
-				_, err := globalDB.Exec("INSERT OR REPLACE INTO dhcp_leases (mac_address, ip_address, dart_version, fqdn, Expiry) VALUES (?, ?, ?, ?, ?)",
-					mac, reqIP.String(), dartVersion, fqdn, time.Now().Add(s.leaseDuration).Format(time.RFC3339))
-				if err != nil {
-					log.Printf("Error writing to SQLite database: %v\n", err)
-				}
-				return dhcp4.ReplyPacket(p, dhcp4.ACK, s.dlIfce.ipNet.IP, reqIP, s.leaseDuration,
-					s.options.SelectOrderOrAll(options[dhcp4.OptionParameterRequestList]))
 			}
 		}
 		return dhcp4.ReplyPacket(p, dhcp4.NAK, s.dlIfce.ipNet.IP, nil, 0, nil)
@@ -267,6 +312,12 @@ func (s *DHCPServer) ServeDHCP(p dhcp4.Packet, msgType dhcp4.MessageType, option
 		for ip, li := range s.leasesByIp {
 			if li.MAC == mac {
 				delete(s.leasesByIp, ip)
+				break
+			}
+		}
+		for fqdn, li := range s.leasesByFQDN {
+			if li.MAC == mac {
+				delete(s.leasesByFQDN, fqdn)
 				break
 			}
 		}
@@ -313,9 +364,4 @@ func (s *DHCPServer) isInPool(ip net.IP) bool {
 	start := IPToUint32(s.headIP)
 	end := IPToUint32(s.tailIP)
 	return ipUint >= start && ipUint <= end
-}
-
-func (s *DHCPServer) isInStaticLeases(mac string, ip net.IP) bool {
-	ok := s.staticLeases[mac] == ip.String()
-	return ok
 }

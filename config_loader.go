@@ -28,14 +28,13 @@ const (
 
 // StaticBinding 表示静态 MAC-IP 绑定
 type StaticBinding struct {
-	MAC string `yaml:"mac"`
-	IP  string `yaml:"ip"`
+	MAC         string `yaml:"mac"`
+	IP          string `yaml:"ip"`
+	FQDN        string `yaml:"fqdn,omitempty"`
+	DARTVersion int    `yaml:"dart_version,omitempty"`
 }
 
 type LinkInterface struct {
-	// Direction LinkDirection
-	// Name      string
-	// IP        net.IP
 	Owner interface{}
 }
 

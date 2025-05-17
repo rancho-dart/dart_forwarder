@@ -82,9 +82,8 @@ func main() {
 		startDHCPServerModule()
 	}()
 
-	// time.Sleep(1 * time.Second)
-
 	time.Sleep(200 * time.Millisecond)
+
 	// Forwarder在启动的时候会检查配置的域名是否可从上联口解析，因此需要放在最后启动
 	wg.Add(1)
 	go func() {
