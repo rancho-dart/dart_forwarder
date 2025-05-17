@@ -20,8 +20,51 @@ type DNSServer struct {
 	ports []int
 }
 
+func resolveNsRecord(domain, dnsServer string) (addrs []net.IP, err error) {
+	c := new(dns.Client)
+	c.Timeout = 3 * time.Second
+
+	m := new(dns.Msg)
+	m.SetQuestion(dns.Fqdn(domain), dns.TypeNS)
+	m.RecursionDesired = true
+
+	resp, _, err := c.Exchange(m, dnsServer+":53")
+	if err != nil {
+		return nil, fmt.Errorf("failed to query NS records for %s: %v", domain, err)
+	}
+
+	if resp.Rcode != dns.RcodeSuccess {
+		return nil, fmt.Errorf("DNS query for %s returned non-success Rcode: %d", domain, resp.Rcode)
+	}
+
+	// 提取 NS 记录
+	var nsRecords []string
+	for _, ans := range resp.Answer {
+		if ns, ok := ans.(*dns.NS); ok {
+			nsRecords = append(nsRecords, ns.Ns)
+		}
+	}
+
+	// 提取胶水记录中的 IP 地址
+	for _, rr := range resp.Extra {
+		if a, ok := rr.(*dns.A); ok {
+			for _, ns := range nsRecords {
+				if a.Hdr.Name == ns {
+					addrs = append(addrs, a.A)
+				}
+			}
+		}
+	}
+
+	if len(addrs) == 0 {
+		return nil, fmt.Errorf("no glue records found for NS records of %s", domain)
+	}
+
+	return addrs, nil
+}
+
 // resolveARecord 递归解析 CNAME 链，直到得到最终的 A 记录
-func resolveARecord(domain, dnsServer string, depth int) ([]net.IP, bool, error) {
+func resolveARecord(domain, dnsServer string, depth int) (addrs []net.IP, supportDart bool, err error) {
 	if depth > 10 {
 		return nil, false, fmt.Errorf("CNAME 链太长，疑似死循环")
 	}
@@ -38,7 +81,7 @@ func resolveARecord(domain, dnsServer string, depth int) ([]net.IP, bool, error)
 		return nil, false, err
 	}
 
-	var supportDart bool = false
+	var suppDart bool = false
 	var aRecords []net.IP
 	var lastCname string
 	var cnameChain = make(map[string]struct{}, 10)
@@ -48,7 +91,7 @@ func resolveARecord(domain, dnsServer string, depth int) ([]net.IP, bool, error)
 		// 如果cnameChain中不包含当前ans中的名称，则添加到cnameChain中
 		rrName := ans.Header().Name
 		if strings.HasPrefix(rrName, DART_HOST_PREFIX) || strings.HasPrefix(rrName, DART_GATEWAY_PREFIX) {
-			supportDart = true
+			suppDart = true
 		}
 
 		switch rr := ans.(type) {
@@ -65,7 +108,7 @@ func resolveARecord(domain, dnsServer string, depth int) ([]net.IP, bool, error)
 	}
 
 	if len(aRecords) > 0 {
-		return aRecords, supportDart, nil
+		return aRecords, suppDart, nil
 	} else if lastCname != "" {
 		return resolveARecord(lastCname, dnsServer, depth+1)
 	}

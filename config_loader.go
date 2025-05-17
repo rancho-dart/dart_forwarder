@@ -44,7 +44,7 @@ type UpLinkInterface struct {
 	DartDomain       string   `yaml:"dart_domain"`
 	PublicIPResolver []string `yaml:"public_ip_resolver"`
 	DNSServers       []string `yaml:"dns_servers"`
-	PublicIP         net.IP
+	_publicIP        net.IP
 	ipNet            net.IPNet
 }
 
@@ -66,6 +66,31 @@ type Config struct {
 }
 
 var CONFIG Config
+
+func (u *UpLinkInterface) PublicIP() net.IP {
+	if u._publicIP == nil {
+		u._publicIP, _ = probePublicIP(u.PublicIPResolver, u.DNSServers[0])
+	}
+
+	return u._publicIP
+}
+
+func (u *UpLinkInterface) resolveNsFromParentDNSServer(domain string) (addrs []net.IP) {
+	for _, dnsServer := range u.DNSServers {
+		nameServers, err := resolveNsRecord(domain, dnsServer)
+		if err != nil {
+			// log.Printf("Error resolving NS record for %s: %v, try next dns server...\n", domain, err)
+			continue
+		} else if len(nameServers) == 0 {
+			log.Printf("No NS records found for %s, try next dns server...\n", domain)
+			return nil
+		} else {
+			return nameServers
+		}
+	}
+	log.Printf("No NS records found for [%s]", domain)
+	return nil
+}
 
 func (li *LinkInterface) Name() string {
 	switch v := li.Owner.(type) {
@@ -142,16 +167,8 @@ func LoadConfig() (*Config, error) {
 		return nil, fmt.Errorf("Uplink.DNSServers cannot be empty")
 	}
 
-	if cfg.Uplink.DartDomain == "." {
-		// If the DartDomain is root domain, we probe the public IP of the uplink, because we may behind NAT gateways
-		publicIP, err := probePublicIP(cfg.Uplink.PublicIPResolver, cfg.Uplink.DNSServers[0])
-		if err != nil {
-			return nil, err
-		}
-		cfg.Uplink.PublicIP = publicIP
-	}
-
 	// Verify configurations of Downlinks interfaces
+	log.Printf("Locating device position: am I delegated to any domain? .. ")
 	for i := range cfg.Downlinks {
 		dl := &cfg.Downlinks[i]
 		dl.LinkInterface.Owner = dl
@@ -159,22 +176,37 @@ func LoadConfig() (*Config, error) {
 		// 将接口域名统一为小写
 		dl.Domain = dns.Fqdn(strings.ToLower(dl.Domain))
 
-		ip, supportDart := DNS_SERVER.resolveFromParentDNSServer(dl.Domain)
-		if cfg.Uplink.DartDomain == "." {
-			if ip != nil {
-				if !ip.Equal(cfg.Uplink.PublicIP) {
-					// If resolved, the two must equal
-					return nil, fmt.Errorf("the uplink's public IP is not equal to the resolved IP of %s", dl.Domain)
-				}
-				if !supportDart {
-					return nil, fmt.Errorf("the device on %s(%s) must support DART protocol", dl.Domain, ip)
-				}
+		nameServers := cfg.Uplink.resolveNsFromParentDNSServer(dl.Domain)
 
+		// 我们先看一下返回的名字服务器中有没有上联口地址
+		for _, ns := range nameServers {
+			if ns.Equal(cfg.Uplink.Addr()) {
+				// 本地的域名已经成功在父域DNS服务器上解析
 				dl.RegistedInUplinkDNS = true
-			} else {
-				// 这是上联口接入了根域，但没有注册到DNS。将来我们发出DART报文的时候，要将公网IP嵌入源地址
-				dl.RegistedInUplinkDNS = false
+				log.Printf("PASS: domain [%s] on interface [%s] has been delegated to [%s] by dns server(s) on uplink interface",
+					dl.Domain, dl.Name, cfg.Uplink.Addr())
+				break
 			}
+		}
+
+		// 如果没有，那么我们再看一下名字服务器中有没有上联口的公网地址
+		if !dl.RegistedInUplinkDNS && isPrivateAddr(cfg.Uplink.Addr()) {
+			for _, ns := range nameServers {
+				if ns.Equal(cfg.Uplink.PublicIP()) {
+					// 本地的域名已经成功在父域DNS服务器上解析
+					dl.RegistedInUplinkDNS = true
+					log.Printf("PASS: domain [%s] configured on interface [%s] has been delegated to [%s]",
+						dl.Domain, dl.Name, cfg.Uplink.PublicIP())
+					log.Printf("Caution: you should map udp port %s:%d => %s:%d & %s:%d => %s:%d on NAT gateway",
+						cfg.Uplink.PublicIP(), DNSPort, &cfg.Uplink.ipNet, DNSPort, cfg.Uplink.PublicIP(), DARTPort, &cfg.Uplink.ipNet, DARTPort)
+					break
+				}
+			}
+		}
+
+		if !dl.RegistedInUplinkDNS {
+			log.Printf("Warning: domain [%s] configured on interface [%s] isn't delegated by dns server(s) on uplink interface. Will use public IP [%s] as DART source address",
+				dl.Domain, dl.Name, cfg.Uplink.PublicIP())
 		}
 
 		ipNets, err := findIpNetsOfIfce(dl.Name)

@@ -228,7 +228,7 @@ NextPacket:
 					// 解决的办法是将自己的公网IP嵌入DART头的源地址中
 					// 我们用[]作为嵌入IP地址的标志。这两个符号不是合法的域名允许的字符，因此不会被DNS服务器接受为域名
 					// 也不应当将它发送到DNS服务器进行解析
-					ip := CONFIG.Uplink.PublicIP
+					ip := CONFIG.Uplink.PublicIP()
 					SrcFqdn = fmt.Sprintf("%s[%d-%d-%d-%d]", SrcFqdn, ip[0], ip[1], ip[2], ip[3])
 				}
 			}
@@ -499,6 +499,7 @@ func createAndStartQueue(queueNo uint16, ifce LinkInterface, style QueueStyle) {
 }
 
 func startForwardModule() {
+
 	rm := NewRuleManager()
 	go rm.CleanupOnSignal()
 
@@ -511,7 +512,7 @@ func startForwardModule() {
 	outIfce := CONFIG.Uplink.LinkInterface.Name()
 	for _, inLI := range CONFIG.Downlinks {
 		// 检查下联口的地址是否是私网地址
-		if isPrivateIP(inLI.ipNet.IP) {
+		if isPrivateAddr(inLI.ipNet.IP) {
 			private_network := inLI.ipNet.String()
 			rm.AddRule("nat", "POSTROUTING", []string{"-o", outIfce, "-s", private_network, "-j", "MASQUERADE"})
 
@@ -549,8 +550,8 @@ func startForwardModule() {
 	select {}
 }
 
-// isPrivateIP 检查IP地址是否是私网地址
-func isPrivateIP(ip net.IP) bool {
+// isPrivateAddr 检查IP地址是否是私网地址
+func isPrivateAddr(ip net.IP) bool {
 	if ip4 := ip.To4(); ip4 != nil {
 		// 10.0.0.0/8
 		if ip4[0] == 10 {
