@@ -274,7 +274,7 @@ func (s *DNSServer) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 				case dns.TypeA:
 					if inLI.Name == outLI.Name {
 						// 同一子域内的主机互相查询，直接返回DHCP分配的IP地址
-						if strings.HasPrefix(queriedDomain, DART_GATEWAY_PREFIX) {
+						if queriedDomain == DART_GATEWAY_PREFIX+inLI.Domain {
 							s.respondWithDartGateway(w, r, queriedDomain, inLI.Domain, inLI.ipNet.IP, false)
 							return
 						} else if queriedDomain == inLI.Domain || queriedDomain == "ns."+inLI.Domain {
