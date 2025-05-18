@@ -101,11 +101,15 @@ func NewDHCPServer(dlIfce DownLinkInterface) *DHCPServer {
 	// 初始化静态租约
 	staticLeases := make(map[string]leaseInfo)
 	for _, binding := range dlIfce.StaticBindings {
+		var fqdn string
+		if binding.FQDN != "" {
+			fqdn = dns.Fqdn(binding.FQDN)
+		}
 		staticLeases[strings.ToLower(binding.MAC)] = leaseInfo{
 			IP:          net.ParseIP(binding.IP).To4(),
 			MAC:         strings.ToLower(binding.MAC),
 			Expiry:      time.Now().Add(24 * time.Hour), // 静态租约默认24小时
-			FQDN:        binding.FQDN,
+			FQDN:        fqdn,
 			DARTVersion: binding.DARTVersion,
 		}
 	}
@@ -189,19 +193,34 @@ func TrimSuffixFold(s, suffix string) string {
 	return s
 }
 
-func (s *DHCPServer) generateFQDN(ip, requestedHostname string) (allocatedFQDN string) {
-	lease, ok := s.leasesByIp[ip]
-	if ok && lease.FQDN != "" {
+func (s *DHCPServer) generateFQDN(ip, requestedHostname string) string {
+	// 优先返回已有 lease 中的 FQDN
+	if lease, ok := s.leasesByIp[ip]; ok && lease.FQDN != "" {
 		return lease.FQDN
 	}
 
-	name := TrimSuffixFold(requestedHostname, "."+s.dlIfce.Domain)
-	if name == "" {
-		name = ip
+	domainSuffix := "." + s.dlIfce.Domain
+
+	// 没有请求 hostname，使用 IP 构造
+	if requestedHostname == "" {
+		return strings.ReplaceAll(ip, ".", "-") + domainSuffix
 	}
 
-	name = strings.ReplaceAll(name, ".", "-") // replace dot with dash if any
-	return name + "." + s.dlIfce.Domain
+	// 请求的是完整的 FQDN
+	if strings.HasSuffix(requestedHostname, domainSuffix) {
+		pureName := TrimSuffixFold(requestedHostname, domainSuffix)
+		if pureName != "" {
+			return strings.ReplaceAll(pureName, ".", "-") + domainSuffix
+		}
+	}
+
+	// 请求的是裸主机名或其它域的 hostname
+	if requestedHostname != s.dlIfce.Domain {
+		return strings.ReplaceAll(TrimSuffixFold(requestedHostname, "."), ".", "-") + domainSuffix
+	}
+
+	// fallback：用 IP 构造
+	return strings.ReplaceAll(ip, ".", "-") + domainSuffix
 }
 
 func (s *DHCPServer) ServeDHCP(p dhcp4.Packet, msgType dhcp4.MessageType, options dhcp4.Options) dhcp4.Packet {
@@ -264,10 +283,10 @@ func (s *DHCPServer) ServeDHCP(p dhcp4.Packet, msgType dhcp4.MessageType, option
 				// 获取FQDN
 				hostname := ""
 				if fqdnBin, ok := options[dhcp4.OptionHostName]; ok {
-					hostname = string(fqdnBin)
+					hostname = dns.Fqdn(string(fqdnBin))
 				}
 
-				fqdn = s.generateFQDN(reqIP.String(), dns.Fqdn(hostname)) // Option hostname (if any) is used as the suggested hostname to generate FQDN
+				fqdn = s.generateFQDN(reqIP.String(), hostname) // Option hostname (if any) is used as the suggested hostname to generate FQDN
 			}
 
 			if fqdn != "" {
@@ -275,8 +294,9 @@ func (s *DHCPServer) ServeDHCP(p dhcp4.Packet, msgType dhcp4.MessageType, option
 				// 将来需要将客户机发来的IP报文转换成DART报文的时候可以使用这个FQDN
 				// 客户机如果想要知道服务器分配给它的FQDN是什么，可以通过DNS反查IP
 
-				lease, ok := s.leasesByFQDN[fqdn]
-				if !ok || lease.IP.Equal(reqIP) {
+				lease, ok := s.leasesByFQDN[fqdn] // 看看此FQDN是不是已经分配出去了（有可能不同主机配置了同一个主机名）
+
+				if !ok || lease.MAC == mac { // 如果没分配，或者虽然已分配但MAC地址一致，则创建/更新lease信息
 					s.leasesByIp[reqIP.String()] = leaseInfo{
 						IP:          reqIP,
 						MAC:         mac,

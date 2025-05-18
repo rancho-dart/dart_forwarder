@@ -187,13 +187,16 @@ func (s *DNSServer) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 		clientIp, inboundIfce := s.getInboundInfo(w)
 
 		if Qtype == dns.TypePTR && r.Question[0].Qclass == dns.ClassINET {
-			queiredReverseIP := net.ParseIP(strings.TrimSuffix(queriedDomain, ".in-addr.arpa.")).To4()
-			if queiredReverseIP != nil {
-				queriedIP := fmt.Sprintf("%d.%d.%d.%d", queiredReverseIP[3], queiredReverseIP[2], queiredReverseIP[1], queiredReverseIP[0])
-				lease, ok := DHCP_SERVERS[inboundIfce.Name()].leasesByIp[queriedIP]
+			rIP := net.ParseIP(strings.TrimSuffix(queriedDomain, ".in-addr.arpa.")).To4()
+			if rIP != nil {
+				queriedIP := fmt.Sprintf("%d.%d.%d.%d", rIP[3], rIP[2], rIP[1], rIP[0])
+				dhcpServer, ok := DHCP_SERVERS[inboundIfce.Name()]
 				if ok {
-					s.respondWithPtr(w, r, queriedDomain, lease.FQDN)
-					return
+					lease, ok := dhcpServer.leasesByIp[queriedIP]
+					if ok {
+						s.respondWithPtr(w, r, queriedDomain, lease.FQDN)
+						return
+					}
 				}
 			}
 		}
@@ -221,7 +224,7 @@ func (s *DNSServer) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 					return
 				case dns.TypeNS:
 					if queriedDomain == outLI.Domain {
-						s.respondWithNS(w, r, queriedDomain) // 从父域查询子域的NS记录。一律回答“我就是该域的名字服务器”
+						s.respondWithNS(w, r, queriedDomain, inLI.ipNet.IP) // 从父域查询子域的NS记录。一律回答“我就是该域的名字服务器”
 					} else {
 						s.respondWithSOA(w, r, queriedDomain, false)
 					}
@@ -289,12 +292,24 @@ func (s *DNSServer) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 					s.respondWithSOA(w, r, queriedDomain, queriedDomain == outLI.Domain) // 从子域查询子域的SOA记录。一律回答“我就是该域的权威服务器”
 					return
 				case dns.TypeNS:
-					if queriedDomain == outLI.Domain {
-						s.respondWithNS(w, r, queriedDomain)
+					if inLI.Name == outLI.Name {
+						// 同一个接口，意味着同一个DART域。
+						var ip net.IP
+						if inLI.Domain == queriedDomain {
+							ip = inLI.ipNet.IP
+						} else {
+							ip, _ = s.getDhcpLeasedIp(inLI.Name, queriedDomain)
+						}
+						s.respondWithNS(w, r, queriedDomain, ip)
+						return
 					} else {
-						s.respondWithSOA(w, r, queriedDomain, false)
+						if queriedDomain == outLI.Domain {
+							s.respondWithNS(w, r, queriedDomain, inLI.ipNet.IP)
+						} else {
+							s.respondWithSOA(w, r, queriedDomain, false)
+						}
+						return
 					}
-					return
 				}
 			}
 		}
@@ -359,7 +374,7 @@ func (s *DNSServer) respondWithForwardQuery(w dns.ResponseWriter, r *dns.Msg) {
 	s.respondWithServerFailure(w, r)
 }
 
-func (s *DNSServer) respondWithNS(w dns.ResponseWriter, r *dns.Msg, domain string) {
+func (s *DNSServer) respondWithNS(w dns.ResponseWriter, r *dns.Msg, domain string, ip net.IP) {
 	m := new(dns.Msg)
 	m.SetReply(r)
 	m.Authoritative = true
@@ -375,14 +390,13 @@ func (s *DNSServer) respondWithNS(w dns.ResponseWriter, r *dns.Msg, domain strin
 	}
 	m.Answer = append(m.Answer, ns)
 
-	_, inboundIfce := s.getInboundInfo(w)
 	glue := &dns.A{
 		Hdr: dns.RR_Header{
 			Name:   "ns." + domain,
 			Rrtype: dns.TypeA,
 			Class:  dns.ClassINET,
 		},
-		A: inboundIfce.Addr(),
+		A: ip,
 	}
 	m.Extra = append(m.Extra, glue)
 
@@ -531,25 +545,25 @@ func (s *DNSServer) respondWithServerFailure(w dns.ResponseWriter, r *dns.Msg) {
 	w.WriteMsg(m)
 }
 
+func (s *DNSServer) getDhcpLeasedIp(ifName, domain string) (net.IP, bool) {
+	dhcpServer, ok := DHCP_SERVERS[ifName]
+	if ok {
+		lease, ok := dhcpServer.leasesByFQDN[domain]
+		if ok {
+			return lease.IP, lease.DARTVersion > 0
+		}
+	}
+	return nil, false
+}
+
 // respondWithDHCP 查询 DHCP SERVER 分配的地址并进行响应
 func (s *DNSServer) respondWithDHCP(w dns.ResponseWriter, dnsMsg *dns.Msg, ifName, domain string) {
-	var ip net.IP
-	var supportDart bool
 
-	dhcpServer, ok := DHCP_SERVERS[ifName]
-	if !ok {
-		s.respondWithRefusal(w, dnsMsg)
-		return
-	}
-
-	lease, ok := dhcpServer.leasesByFQDN[domain]
-	if !ok {
+	ip, supportDart := s.getDhcpLeasedIp(ifName, domain)
+	if ip == nil {
 		s.respondWithNxdomain(w, dnsMsg)
 		return
 	}
-
-	ip = lease.IP
-	supportDart = lease.DARTVersion > 0
 
 	// 构建 DNS 响应
 	m := new(dns.Msg)
