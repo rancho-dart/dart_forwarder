@@ -14,5 +14,14 @@ dart_forwarder
 # Ignore VSCode settings
 __*
 bin/
+<<<<<<< HEAD
 .vscode/settings.json
 go/
+=======
+<<<<<<< HEAD
+go
+=======
+go/
+>>>>>>> 67bc7a698b0e06ec95dd8fabb15ee35444e7dfd3
+.vscode/settings.json
+>>>>>>> a1fdc0d713861dcccd8e826e8820b3016ec347d9

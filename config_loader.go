@@ -201,7 +201,6 @@ func LoadConfig() (*Config, error) {
 		return nil, fmt.Errorf("failed to get addresses for interface %s: %v", cfg.Uplink.Name, err)
 	}
 	cfg.Uplink.ipNet = ipNets[0]
-	cfg.Uplink.Owner = &cfg.Uplink
 
 	if len(cfg.Uplink.DNSServers) == 0 {
 		return nil, fmt.Errorf("Uplink.DNSServers cannot be empty")
