@@ -281,7 +281,7 @@ NextPacket:
 			}
 
 			// hex_dump(buffer.Bytes())
-			if err := fr.SendPacket(&CONFIG.Uplink.LinkInterface, ip.DstIP, buffer.Bytes()); err != nil {
+			if err := fr.SendPacket(&CONFIG.Uplink.LinkInterface, newIp.DstIP, buffer.Bytes()); err != nil {
 				log.Printf("[Downlink FORWARD] Failed to send packet: %v", err)
 			}
 
