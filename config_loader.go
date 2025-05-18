@@ -201,6 +201,7 @@ func LoadConfig() (*Config, error) {
 		return nil, fmt.Errorf("failed to get addresses for interface %s: %v", cfg.Uplink.Name, err)
 	}
 	cfg.Uplink.ipNet = ipNets[0]
+	cfg.Uplink.Owner = &cfg.Uplink
 
 	if len(cfg.Uplink.DNSServers) == 0 {
 		return nil, fmt.Errorf("Uplink.DNSServers cannot be empty")
@@ -219,11 +220,11 @@ func LoadConfig() (*Config, error) {
 
 		// 我们先看一下返回的名字服务器中有没有上联口地址
 		for _, ns := range nameServers {
-			if ns.Equal(cfg.Uplink.Addr()) {
+			if ns.Equal(cfg.Uplink.ipNet.IP) {
 				// 本地的域名已经成功在父域DNS服务器上解析
 				dl.RegistedInUplinkDNS = true
 				log.Printf("PASS: domain [%s] on interface [%s] has been delegated to [%s] by dns server(s) on uplink interface",
-					dl.Domain, dl.Name, cfg.Uplink.Addr())
+					dl.Domain, dl.Name, cfg.Uplink.ipNet.IP)
 				break
 			}
 		}
@@ -247,7 +248,7 @@ func LoadConfig() (*Config, error) {
 			DartDomain := cfg.Uplink.probeLocation(dl.Domain)
 			if DartDomain != "" {
 				log.Printf("We are in DART domain: [%s]", DartDomain)
-				log.Fatalf("Sub-DART-domain not allowed in unregistered DART domain. Exit.")
+				log.Fatalf("Sub-DART-domain not allowed in undelegated DART domain. Exit.")
 			}
 
 			publicIP := cfg.Uplink.PublicIP()
