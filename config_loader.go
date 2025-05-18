@@ -90,8 +90,45 @@ func (u *UpLinkInterface) resolveNsFromParentDNSServer(domain string) (addrs []n
 			return nameServers
 		}
 	}
-	log.Printf("No NS records found for [%s]", domain)
+	// log.Printf("No NS records found for [%s]", domain)
 	return nil
+}
+
+func (u *UpLinkInterface) resolveFromParentDNSServer(fqdn string) (ip net.IP, supportDart bool) {
+	for _, dnsServer := range u.DNSServers {
+		IPAddresses, supportDart, err := resolveARecord(fqdn, dnsServer, 0)
+		if err != nil {
+			log.Printf("Error resolving A record for %s: %v, try next dns server...\n", fqdn, err)
+			continue
+		} else if len(IPAddresses) == 0 {
+			// log.Printf("No A records found for %s\n", fqdn)
+			return nil, false
+		} else {
+			return IPAddresses[0], supportDart
+		}
+	}
+	return nil, false
+}
+
+func (u *UpLinkInterface) probeLocation(domain string) string {
+	domain = strings.TrimSuffix(domain, ".") // 去除末尾的点，标准化格式
+
+	for {
+		query := "dart-gateway." + domain
+		ip, suppDart := u.resolveFromParentDNSServer(query)
+		if ip != nil && suppDart {
+			return domain
+		}
+
+		// 向上一级域回退
+		if i := strings.Index(domain, "."); i >= 0 {
+			domain = domain[i+1:]
+		} else {
+			break // 没有更多的父域了
+		}
+	}
+
+	return ""
 }
 
 func (li *LinkInterface) Name() string {
@@ -207,6 +244,12 @@ func LoadConfig() (*Config, error) {
 		}
 
 		if !dl.RegistedInUplinkDNS {
+			DartDomain := cfg.Uplink.probeLocation(dl.Domain)
+			if DartDomain != "" {
+				log.Printf("We are in DART domain: [%s]", DartDomain)
+				log.Fatalf("Sub-DART-domain not allowed in unregistered DART domain. Exit.")
+			}
+
 			publicIP := cfg.Uplink.PublicIP()
 			if publicIP != nil {
 				log.Printf("Warning: domain [%s] configured on interface [%s] isn't delegated by dns server(s) on uplink interface. Will use public IP [%s] as DART source address", dl.Domain, dl.Name, publicIP)
@@ -277,7 +320,7 @@ func probePublicIP(websites []string, dnsServer string) (net.IP, error) {
 	resolver := &net.Resolver{
 		PreferGo: true,
 		Dial: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return net.Dial("tcp4", dnsServer+":53")
+			return net.Dial("udp4", dnsServer+":53")
 		},
 	}
 

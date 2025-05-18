@@ -115,22 +115,6 @@ func resolveARecord(domain, dnsServer string, depth int) (addrs []net.IP, suppor
 	return nil, false, nil
 }
 
-func (s *DNSServer) resolveFromParentDNSServer(fqdn string) (ip net.IP, supportDart bool) {
-	for _, dnsServer := range CONFIG.Uplink.DNSServers {
-		IPAddresses, supportDart, err := resolveARecord(fqdn, dnsServer, 0)
-		if err != nil {
-			log.Printf("Error resolving A record for %s: %v, try next dns server...\n", fqdn, err)
-			continue
-		} else if len(IPAddresses) == 0 {
-			log.Printf("No A records found for %s\n", fqdn)
-			return nil, false
-		} else {
-			return IPAddresses[0], supportDart
-		}
-	}
-	return nil, false
-}
-
 func (s *DNSServer) resolve(fqdn string) (outIfce *LinkInterface, ip net.IP, supportDart bool) {
 	outIfce = s.getOutboundInfo(dns.Fqdn(fqdn)) // Only find in the downlink interfaces!
 	if outIfce == nil {
@@ -243,7 +227,7 @@ func (s *DNSServer) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 					}
 				}
 
-				ipInParentDomain, queriedSupportDart := s.resolveFromParentDNSServer(queriedDomain)
+				ipInParentDomain, queriedSupportDart := outLI.resolveFromParentDNSServer(queriedDomain)
 				if ipInParentDomain == nil {
 					s.respondWithNxdomain(w, r)
 					return

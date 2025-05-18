@@ -11,8 +11,10 @@ import (
 )
 
 const (
-	DhcpLeaseDB = "dhcp_leases.sqlite3"
-	DBdir       = "/var/lib/dart"
+	DhcpLeaseDB   = "dhcp_leases.sqlite3"
+	DBdir         = "/var/lib/dart"
+	BIG_VERSION   = 1
+	SMALL_VERSION = 0
 )
 
 var globalDB *sql.DB // 新增全局变量，用于存储数据库连接
@@ -50,6 +52,7 @@ func initDB() (*sql.DB, error) {
 }
 
 func main() {
+	log.Printf("DART daemon v%d.%d starting...", BIG_VERSION, SMALL_VERSION)
 	// 初始化配置
 	cfg, err := LoadConfig()
 	if err != nil {
