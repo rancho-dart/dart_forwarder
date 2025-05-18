@@ -94,8 +94,10 @@ func (fr *ForwardRoutine) processDownlinkInputPackets() {
 
 							// 调用 dnsServer.resolve() 获取目标 IP
 							// TODO: All packet inbound from downlink will be processed to uplink. thus, shouldn't call resolve, which is used to find downlink interface
-							outIfce, destIp, _ := DNS_SERVER.resolve(string(dart.DstFqdn))
-							if outIfce == nil || destIp == nil {
+							// outIfce, destIp, _ := DNS_SERVER.resolve(string(dart.DstFqdn))
+							outIfce := CONFIG.Uplink
+							destIp, _ := outIfce.resolveFromParentDNSServer(string(dart.DstFqdn))
+							if destIp == nil {
 								// 没有找到合适的转发接口或目标 IP，丢弃报文
 								packet.SetVerdict(netfilter.NF_DROP)
 								continue
@@ -103,7 +105,7 @@ func (fr *ForwardRoutine) processDownlinkInputPackets() {
 
 							// 修改 IP 报头的目标地址和源地址
 							ip.DstIP = destIp
-							ip.SrcIP = CONFIG.Uplink.ipNet.IP
+							ip.SrcIP = outIfce.ipNet.IP
 							udp.SetNetworkLayerForChecksum(ip)
 
 							// 重新序列化 IP + UDP + DART + 原始 Payload
@@ -120,7 +122,7 @@ func (fr *ForwardRoutine) processDownlinkInputPackets() {
 							}
 
 							// 从上行接口发出修改后的报文
-							if err := fr.SendPacket(&CONFIG.Uplink.LinkInterface, destIp, buffer.Bytes()); err != nil {
+							if err := fr.SendPacket(&outIfce.LinkInterface, destIp, buffer.Bytes()); err != nil {
 								log.Printf("[Downlink INPUT] Failed to send packet: %v", err)
 							}
 

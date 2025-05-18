@@ -115,25 +115,46 @@ func resolveARecord(domain, dnsServer string, depth int) (addrs []net.IP, suppor
 	return nil, false, nil
 }
 
+func findSubDomainUnder(domain, base string) (string, bool) {
+	if !strings.HasSuffix(domain, base) {
+		return "", false
+	}
+
+	// 去掉 base 前面的部分，找到前一个 label
+	remain := strings.TrimSuffix(domain, base)
+
+	// 如果 base 前有一个点，则 remain 应该以点结尾
+	if strings.HasSuffix(remain, ".") {
+		remain = strings.TrimSuffix(remain, ".")
+	}
+
+	// 找到最后一个 "."，表示下一个上级域的边界
+	lastDot := strings.LastIndex(remain, ".")
+	if lastDot == -1 {
+		// 没有更多 label，说明 base 就是 domain
+		return base, true
+	}
+
+	// 拼回一个完整的 "xxx.base"
+	return domain[lastDot+1:], true
+}
 func (s *DNSServer) resolve(fqdn string) (outIfce *LinkInterface, ip net.IP, supportDart bool) {
 	outIfce = s.getOutboundInfo(dns.Fqdn(fqdn)) // Only find in the downlink interfaces!
-	if outIfce == nil {
-		return nil, nil, false
+	if outIfce != nil {
+		dhcpServer, ok := DHCP_SERVERS[outIfce.Name()]
+		if ok {
+			subDomain, ok := findSubDomainUnder(fqdn, dhcpServer.dlIfce.Domain)
+			if ok {
+				lease, ok := dhcpServer.leasesByFQDN[subDomain]
+				if ok {
+					ip = lease.IP
+					supportDart = lease.DARTVersion > 0
+					return outIfce, ip, supportDart
+				}
+			}
+		}
 	}
-
-	dhcpServer, ok := DHCP_SERVERS[outIfce.Name()]
-	if !ok {
-		return nil, nil, false
-	}
-
-	lease, ok := dhcpServer.leasesByFQDN[fqdn]
-	if !ok {
-		return nil, nil, false
-	}
-
-	ip = lease.IP
-	supportDart = lease.DARTVersion > 0
-	return
+	return nil, nil, false
 }
 
 // NewDNSServer 创建一个新的 DNS Server 实例
