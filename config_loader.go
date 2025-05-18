@@ -67,11 +67,13 @@ type Config struct {
 
 var CONFIG Config
 
-func (u *UpLinkInterface) PublicIP() net.IP {
-	if u._publicIP == nil {
-		u._publicIP, _ = probePublicIP(u.PublicIPResolver, u.DNSServers[0])
-	}
+var _hasProbed bool
 
+func (u *UpLinkInterface) PublicIP() net.IP {
+	if !_hasProbed {
+		u._publicIP, _ = probePublicIP(u.PublicIPResolver, u.DNSServers[0])
+		_hasProbed = true
+	}
 	return u._publicIP
 }
 
