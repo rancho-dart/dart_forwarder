@@ -205,8 +205,12 @@ func LoadConfig() (*Config, error) {
 		}
 
 		if !dl.RegistedInUplinkDNS {
-			log.Printf("Warning: domain [%s] configured on interface [%s] isn't delegated by dns server(s) on uplink interface. Will use public IP [%s] as DART source address",
-				dl.Domain, dl.Name, cfg.Uplink.PublicIP())
+			publicIP := cfg.Uplink.PublicIP()
+			if publicIP != nil {
+				log.Printf("Warning: domain [%s] configured on interface [%s] isn't delegated by dns server(s) on uplink interface. Will use public IP [%s] as DART source address", dl.Domain, dl.Name, publicIP)
+			} else {
+				log.Fatalf("Domain [%s] configured on interface [%s] isn't delegated by dns server(s) on uplink interface, and the public IP of uplink interface is not available. Please check your configuration.", dl.Domain, dl.Name)
+			}
 		}
 
 		ipNets, err := findIpNetsOfIfce(dl.Name)

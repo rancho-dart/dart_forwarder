@@ -297,10 +297,15 @@ func (s *DNSServer) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 						var ip net.IP
 						if inLI.Domain == queriedDomain {
 							ip = inLI.ipNet.IP
-						} else {
-							ip, _ = s.getDhcpLeasedIp(inLI.Name, queriedDomain)
+							s.respondWithNS(w, r, queriedDomain, ip)
+						} else { // queriedDomin 是 inLI.Domain的子域
+							if inLI.RegistedInUplinkDNS {
+								ip, _ = s.getDhcpLeasedIp(inLI.Name, queriedDomain)
+								s.respondWithNS(w, r, queriedDomain, ip)
+							} else {
+								s.respondWithSOA(w, r, queriedDomain, false) // 如果当前接口的域并没有注册到上级DNS，那么无法派生出可解析的子域
+							}
 						}
-						s.respondWithNS(w, r, queriedDomain, ip)
 						return
 					} else {
 						if queriedDomain == outLI.Domain {
