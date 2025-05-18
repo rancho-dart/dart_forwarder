@@ -90,8 +90,45 @@ func (u *UpLinkInterface) resolveNsFromParentDNSServer(domain string) (addrs []n
 			return nameServers
 		}
 	}
-	log.Printf("No NS records found for [%s]", domain)
+	// log.Printf("No NS records found for [%s]", domain)
 	return nil
+}
+
+func (u *UpLinkInterface) resolveFromParentDNSServer(fqdn string) (ip net.IP, supportDart bool) {
+	for _, dnsServer := range u.DNSServers {
+		IPAddresses, supportDart, err := resolveARecord(fqdn, dnsServer, 0)
+		if err != nil {
+			log.Printf("Error resolving A record for %s: %v, try next dns server...\n", fqdn, err)
+			continue
+		} else if len(IPAddresses) == 0 {
+			// log.Printf("No A records found for %s\n", fqdn)
+			return nil, false
+		} else {
+			return IPAddresses[0], supportDart
+		}
+	}
+	return nil, false
+}
+
+func (u *UpLinkInterface) probeLocation(domain string) string {
+	domain = strings.TrimSuffix(domain, ".") // 去除末尾的点，标准化格式
+
+	for {
+		query := "dart-gateway." + domain
+		ip, suppDart := u.resolveFromParentDNSServer(query)
+		if ip != nil && suppDart {
+			return domain
+		}
+
+		// 向上一级域回退
+		if i := strings.Index(domain, "."); i >= 0 {
+			domain = domain[i+1:]
+		} else {
+			break // 没有更多的父域了
+		}
+	}
+
+	return ""
 }
 
 func (li *LinkInterface) Name() string {
@@ -207,9 +244,10 @@ func LoadConfig() (*Config, error) {
 		}
 
 		if !dl.RegistedInUplinkDNS {
-			isInDartDomain := probeLocation()
-			if isInDartDomain {
-				log.Fatal("Sub-DART-domain not permitted in unregistered DART domain.")
+			DartDomain := cfg.Uplink.probeLocation(dl.Domain)
+			if DartDomain != "" {
+				log.Printf("We are in DART domain: [%s]", DartDomain)
+				log.Fatalf("Sub-DART-domain not allowed in unregistered DART domain. Exit.")
 			}
 
 			publicIP := cfg.Uplink.PublicIP()
