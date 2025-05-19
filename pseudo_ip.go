@@ -11,6 +11,7 @@ import (
 	"encoding/binary"
 	"log"
 	"net"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -83,6 +84,12 @@ func (p *PseudoIpPool) FindOrAllocate(domain string, realIP net.IP, udpport uint
 			p.domainMap[domain] = entry
 			p.ipMap[ipInt] = entry
 			p.next = ipInt + 1
+			p.mutex.Unlock()
+			// 新增：同步数据库
+			if err := p.assignPseudoAddress(domain, pseudoIP.String(), realIP.String(), entry.udpPort); err != nil {
+				log.Printf("Failed to assign pseudo address for %s: %v", domain, err)
+			}
+			p.mutex.Lock()
 			return pseudoIP
 		}
 	}
@@ -118,7 +125,12 @@ func (p *PseudoIpPool) CleanupExpired() {
 	for ipInt, entry := range p.ipMap {
 		if now.Sub(entry.LastUsedAt) > p.ttl {
 			delete(p.ipMap, ipInt)
-			delete(p.domainMap, entry.Domain)
+			domain := entry.Domain
+			delete(p.domainMap, domain)
+			// 新增：同步数据库
+			if err := p.releasePseudoAddress(domain); err != nil {
+				log.Printf("Failed to release pseudo address for %s: %v", domain, err)
+			}
 		}
 	}
 }
@@ -132,4 +144,102 @@ func uint32ToIP(i uint32) net.IP {
 	ip := make(net.IP, 4)
 	binary.BigEndian.PutUint32(ip, i)
 	return ip
+}
+
+// 分配伪地址时同步数据库
+func (p *PseudoIpPool) assignPseudoAddress(domain, pseudoIP, realIP string, udpPort uint16) error {
+	_, err := DB.Exec("INSERT INTO pseudo_addresses (Domain, PseudoIP, RealIP, udpPort, LastUsedAt) VALUES (?, ?, ?, ?, ?)",
+		domain, pseudoIP, realIP, udpPort, time.Now().Format(time.RFC3339))
+	return err
+}
+
+// 回收伪地址时同步数据库
+func (p *PseudoIpPool) releasePseudoAddress(domain string) error {
+	_, err := DB.Exec("DELETE FROM pseudo_addresses WHERE Domain = ?", domain)
+	return err
+}
+
+// 加载伪地址分配记录
+func (p *PseudoIpPool) loadPseudoAddresses() {
+	rows, err := DB.Query("SELECT Domain, PseudoIP, RealIP, udpPort, LastUsedAt FROM pseudo_addresses")
+	if err != nil {
+		log.Printf("Error loading pseudo addresses: %v\n", err)
+		return
+	}
+	defer rows.Close()
+
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+
+	for rows.Next() {
+		var domain, pseudoIPStr, realIPStr, udpPortStr, lastUsedAt string
+		if err := rows.Scan(&domain, &pseudoIPStr, &realIPStr, &udpPortStr, &lastUsedAt); err != nil {
+			log.Printf("Error scanning pseudo address row: %v\n", err)
+			continue
+		}
+
+		pseudoIP := net.ParseIP(pseudoIPStr)
+		if pseudoIP == nil {
+			log.Printf("Invalid pseudo IP address: %s", pseudoIPStr)
+			continue
+		}
+
+		ipInt := ipToUint32(pseudoIP.To4())
+		if p.head > ipInt || ipInt > p.tail {
+			log.Printf("Pseudo IP %s not in pool", pseudoIPStr)
+			continue
+		}
+
+		// 解析realIP
+		realIP := net.ParseIP(realIPStr)
+		if realIP == nil && realIPStr != "" {
+			log.Printf("Invalid real IP address: %s", realIPStr)
+			continue
+		}
+
+		// 解析udpPort
+		var port uint16 = 0
+		if udpPortStr != "" {
+			port64, err := strconv.ParseUint(udpPortStr, 10, 16)
+			if err != nil {
+				log.Printf("Invalid udpPort value: %s", udpPortStr)
+				continue
+			}
+			port = uint16(port64)
+		}
+
+		// 解析时间
+		usedAt, err := time.Parse(time.RFC3339, lastUsedAt)
+		if err != nil {
+			log.Printf("Invalid timestamp format: %s", lastUsedAt)
+			usedAt = time.Now() // 默认使用当前时间
+		}
+
+		entry := &PseudoIpEntry{
+			Domain:     domain,
+			PseudoIP:   pseudoIP,
+			RealIP:     realIP,
+			udpPort:    port,
+			LastUsedAt: usedAt,
+		}
+		p.domainMap[domain] = entry
+		p.ipMap[ipInt] = entry
+	}
+}
+
+func init() {
+	// 初始化数据库
+	// 创建表以存储伪地址分配记录
+	_, errCreatePseudoTbl := DB.Exec(`
+		CREATE TABLE IF NOT EXISTS pseudo_addresses (
+			Domain TEXT PRIMARY KEY,
+			PseudoIP TEXT NOT NULL,
+			RealIP TEXT,
+			udpPort INTEGER,
+			LastUsedAt TEXT
+		)
+	`)
+	if errCreatePseudoTbl != nil {
+		log.Fatal("Failed to create pseudo_addresses table:", errCreatePseudoTbl)
+	}
 }

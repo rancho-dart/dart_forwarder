@@ -49,13 +49,13 @@ func (fr *ForwardRoutine) Run() {
 	case *DownLinkInterface:
 		switch fr.style {
 		case Input:
-			log.Println("downlink input processing start")
+			log.Println("Downlink NAT-4-DART processing start")
 			fr.processDownlinkInputPackets()
-			log.Println("downlink input processing end")
+			log.Println("Downlink NAT-4-DART processing end")
 		case Forward:
-			log.Println("downlink forward processing start")
+			log.Println("Downlink DART FORWARD processing start")
 			fr.processDownlinkForwardPackets()
-			log.Println("downlink forward processing end")
+			log.Println("Downlink DART FORWARD processing end")
 		}
 	}
 }
@@ -78,7 +78,7 @@ func (fr *ForwardRoutine) processDownlinkInputPackets() {
 		ipLayer := packet.Packet.Layer(layers.LayerTypeIPv4)
 		if ipLayer != nil {
 			ip := ipLayer.(*layers.IPv4)
-			log.Printf("[Downlink INPUT] Received packet: %s -> %s\n", ip.SrcIP, ip.DstIP)
+			log.Printf("[Downlink NAT-4-DART] Received packet: %s -> %s\n", ip.SrcIP, ip.DstIP)
 
 			// 检查是否为 UDP 报文且目标端口为 DART 端口
 			if ip.Protocol == layers.IPProtocolUDP {
@@ -90,13 +90,13 @@ func (fr *ForwardRoutine) processDownlinkInputPackets() {
 						dartLayer := packet.Packet.Layer(LayerTypeDART)
 						if dartLayer != nil {
 							dart := dartLayer.(*DART)
-							log.Printf("[Downlink INPUT] Received DART packet: %s -> %s\n", dart.SrcFqdn, dart.DstFqdn)
+							log.Printf("[Downlink NAT-4-DART] Received DART packet: %s -> %s\n", dart.SrcFqdn, dart.DstFqdn)
 
 							// 调用 dnsServer.resolve() 获取目标 IP
 							// TODO: All packet inbound from downlink will be processed to uplink. thus, shouldn't call resolve, which is used to find downlink interface
 							// outIfce, destIp, _ := DNS_SERVER.resolve(string(dart.DstFqdn))
 							outIfce := CONFIG.Uplink
-							destIp, _ := outIfce.resolveFromParentDNSServer(string(dart.DstFqdn))
+							destIp, _ := outIfce.lookupA(string(dart.DstFqdn))
 							if destIp == nil {
 								// 没有找到合适的转发接口或目标 IP，丢弃报文
 								packet.SetVerdict(netfilter.NF_DROP)
@@ -116,14 +116,14 @@ func (fr *ForwardRoutine) processDownlinkInputPackets() {
 							}
 							err := gopacket.SerializeLayers(buffer, opts, ip, udp, dart, gopacket.Payload(dart.Payload))
 							if err != nil {
-								log.Printf("[Downlink INPUT] Failed to serialize packet: %v", err)
+								log.Printf("[Downlink NAT-4-DART] Failed to serialize packet: %v", err)
 								packet.SetVerdict(netfilter.NF_DROP)
 								continue
 							}
 
 							// 从上行接口发出修改后的报文
 							if err := fr.SendPacket(&outIfce.LinkInterface, destIp, buffer.Bytes()); err != nil {
-								log.Printf("[Downlink INPUT] Failed to send packet: %v", err)
+								log.Printf("[Downlink NAT-4-DART] Failed to send packet: %v", err)
 							}
 
 							// 丢弃原始报文
@@ -173,7 +173,7 @@ func (fr *ForwardRoutine) handleExceededMTU(packetLen int, ipOfLongPkt *layers.I
 		return err
 	}
 
-	log.Printf("[Downlink FORWARD] ICMP packet too long replied to sender. Suggested MTU: %d", suggestMTU)
+	log.Printf("[Downlink DART FORWARD] ICMP 'packet too long' replied to sender. Suggested MTU: %d", suggestMTU)
 	return nil
 }
 func (fr *ForwardRoutine) processDownlinkForwardPackets() {
@@ -192,7 +192,7 @@ NextPacket:
 			if ip == nil {
 				break
 			}
-			log.Printf("[Downlink FORWARD] Received packet: %s -> %s\n", ip.SrcIP, ip.DstIP)
+			log.Printf("[Downlink DART FORWARD] Received packet: %s -> %s\n", ip.SrcIP, ip.DstIP)
 			// check whether the destip is pseudo ip
 			if !PSEUDO_POOL.isPseudoIP(ip.DstIP) {
 				break
@@ -203,7 +203,7 @@ NextPacket:
 			// 所以如果表中能查到，目标域名和其在上联口所在域中的IP是都可以直接得到
 			DstFqdn, DstIP, DstUdpPort, ok := PSEUDO_POOL.Lookup(ip.DstIP)
 			if !ok {
-				log.Printf("[Downlink FORWARD] DstIP %s not found in pseudo ip pool\n", ip.DstIP)
+				log.Printf("[Downlink DART FORWARD] DstIP %s not found in pseudo ip pool\n", ip.DstIP)
 				packet.SetVerdict(netfilter.NF_DROP)
 				continue NextPacket
 			}
@@ -214,14 +214,14 @@ NextPacket:
 			inLI := fr.ifce.Owner.(*DownLinkInterface) // 报文肯定是下联口接收到的
 			server, ok := DHCP_SERVERS[inLI.Name]
 			if !ok || server == nil {
-				log.Printf("[Downlink FORWARD] no DHCP server for interface %s\n", inLI.Name)
+				log.Printf("[Downlink DART FORWARD] no DHCP server for interface %s\n", inLI.Name)
 				packet.SetVerdict(netfilter.NF_DROP)
 				continue NextPacket
 			}
 
 			lease, ok := server.leasesByIp[ip.SrcIP.String()]
 			if !ok {
-				log.Printf("[Downlink FORWARD] no lease for IP %s\n", ip.SrcIP)
+				log.Printf("[Downlink DART FORWARD] no lease for IP %s\n", ip.SrcIP)
 				packet.SetVerdict(netfilter.NF_DROP)
 				continue NextPacket
 			}
@@ -269,7 +269,7 @@ NextPacket:
 			err := gopacket.SerializeLayers(buffer, opts, &newIp, udp, dart, gopacket.Payload(dart.Payload))
 
 			if err != nil {
-				log.Printf("[Downlink FORWARD] Failed to serialize packet: %v", err)
+				log.Printf("[Downlink DART FORWARD] Failed to serialize packet: %v", err)
 				packet.SetVerdict(netfilter.NF_DROP)
 				continue NextPacket
 			}
@@ -279,7 +279,7 @@ NextPacket:
 			if packetLen > MTU {
 				err := fr.handleExceededMTU(packetLen, ip)
 				if err != nil {
-					log.Printf("[Downlink FORWARD] Failed to handle exceeded MTU: %v", err)
+					log.Printf("[Downlink DART FORWARD] Failed to handle exceeded MTU: %v", err)
 				}
 				packet.SetVerdict(netfilter.NF_DROP)
 				continue NextPacket
@@ -287,7 +287,7 @@ NextPacket:
 
 			// hex_dump(buffer.Bytes())
 			if err := fr.SendPacket(&CONFIG.Uplink.LinkInterface, newIp.DstIP, buffer.Bytes()); err != nil {
-				log.Printf("[Downlink FORWARD] Failed to send packet: %v", err)
+				log.Printf("[Downlink DART FORWARD] Failed to send packet: %v", err)
 			}
 
 			packet.SetVerdict(netfilter.NF_DROP)
@@ -539,13 +539,13 @@ func startForwardModule() {
 	for _, ifce := range CONFIG.Downlinks {
 		createAndStartQueue(queueNo, ifce.LinkInterface, Forward)
 		if err := rm.AddRule("filter", "FORWARD", []string{"-i", ifce.Name, "-j", "NFQUEUE", "--queue-num", strconv.Itoa(int(queueNo))}); err != nil {
-			log.Fatalf("Failed to set iptables rule for downlink forward: %v", err)
+			log.Fatalf("Failed to set iptables rule for Downlink DART FORWARD: %v", err)
 		}
 		queueNo++
 
 		createAndStartQueue(queueNo, ifce.LinkInterface, Input)
 		if err := rm.AddRule("filter", "INPUT", []string{"-i", ifce.Name, "-p", "udp", "--dport", "55847", "-j", "NFQUEUE", "--queue-num", strconv.Itoa(int(queueNo))}); err != nil {
-			log.Fatalf("Failed to set iptables rule for downlink input: %v", err)
+			log.Fatalf("Failed to set iptables rule for Downlink NAT-4-DART: %v", err)
 		}
 		queueNo++
 	}

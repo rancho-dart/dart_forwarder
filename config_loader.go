@@ -76,7 +76,7 @@ func (u *UpLinkInterface) PublicIP() net.IP {
 	return u._publicIP
 }
 
-func (u *UpLinkInterface) resolveNsFromParentDNSServer(domain string) (addrs []net.IP) {
+func (u *UpLinkInterface) lookupNS(domain string) (addrs []net.IP) {
 	for _, dnsServer := range u.DNSServers {
 		nameServers, err := resolveNsRecord(domain, dnsServer)
 		if err != nil {
@@ -93,7 +93,7 @@ func (u *UpLinkInterface) resolveNsFromParentDNSServer(domain string) (addrs []n
 	return nil
 }
 
-func (u *UpLinkInterface) resolveFromParentDNSServer(fqdn string) (ip net.IP, supportDart bool) {
+func (u *UpLinkInterface) lookupA(fqdn string) (ip net.IP, supportDart bool) {
 	for _, dnsServer := range u.DNSServers {
 		IPAddresses, supportDart, err := resolveARecord(fqdn, dnsServer, 0)
 		if err != nil {
@@ -114,7 +114,7 @@ func (u *UpLinkInterface) probeLocation(domain string) string {
 
 	for {
 		query := "dart-gateway." + domain
-		ip, suppDart := u.resolveFromParentDNSServer(query)
+		ip, suppDart := u.lookupA(query)
 		if ip != nil && suppDart {
 			return domain
 		}
@@ -214,7 +214,7 @@ func LoadConfig() (*Config, error) {
 		// 将接口域名统一为小写
 		dl.Domain = dns.Fqdn(strings.ToLower(dl.Domain))
 
-		nameServers := cfg.Uplink.resolveNsFromParentDNSServer(dl.Domain)
+		nameServers := cfg.Uplink.lookupNS(dl.Domain)
 
 		// 我们先看一下返回的名字服务器中有没有上联口地址
 		for _, ns := range nameServers {

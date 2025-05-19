@@ -118,7 +118,7 @@ func NewDHCPServer(dlIfce DownLinkInterface) *DHCPServer {
 	var leasesByIp = make(map[string]leaseInfo)
 	var leasesByFQDN = make(map[string]leaseInfo)
 	if dlIfce.AddressPool != "" {
-		rows, err := globalDB.Query("SELECT mac_address, ip_address, fqdn, dart_version, Expiry FROM dhcp_leases")
+		rows, err := DB.Query("SELECT mac_address, ip_address, fqdn, dart_version, Expiry FROM dhcp_leases")
 		if err != nil {
 			log.Printf("Error reading from SQLite database: %v\n", err)
 		}
@@ -315,7 +315,7 @@ func (s *DHCPServer) ServeDHCP(p dhcp4.Packet, msgType dhcp4.MessageType, option
 
 					// write to db
 					log.Printf("Write to db: mac=%s, ip=%s, dart_version=%d, fqdn=%s, Expiry=%s\n", mac, reqIP.String(), dartVersion, fqdn, time.Now().Add(s.leaseDuration).Format(time.RFC3339))
-					_, err := globalDB.Exec("INSERT OR REPLACE INTO dhcp_leases (mac_address, ip_address, dart_version, fqdn, Expiry) VALUES (?, ?, ?, ?, ?)",
+					_, err := DB.Exec("INSERT OR REPLACE INTO dhcp_leases (mac_address, ip_address, dart_version, fqdn, Expiry) VALUES (?, ?, ?, ?, ?)",
 						mac, reqIP.String(), dartVersion, fqdn, time.Now().Add(s.leaseDuration).Format(time.RFC3339))
 					if err != nil {
 						log.Printf("Error writing to SQLite database: %v\n", err)
@@ -343,7 +343,7 @@ func (s *DHCPServer) ServeDHCP(p dhcp4.Packet, msgType dhcp4.MessageType, option
 		}
 
 		log.Printf("Delete from db: mac=%s, ip=%s", mac, p.CIAddr())
-		_, err := globalDB.Exec("DELETE FROM dhcp_leases WHERE mac_address = ?", mac)
+		_, err := DB.Exec("DELETE FROM dhcp_leases WHERE mac_address = ?", mac)
 		if err != nil {
 			log.Printf("Failed to delete lease: %v", err)
 		}
@@ -387,7 +387,23 @@ func (s *DHCPServer) findFreeIP(mac string) net.IP {
 
 func (s *DHCPServer) isInPool(ip net.IP) bool {
 	ipUint := IPToUint32(ip)
-	start := IPToUint32(s.headIP)
-	end := IPToUint32(s.tailIP)
-	return ipUint >= start && ipUint <= end
+	head := IPToUint32(s.headIP)
+	tail := IPToUint32(s.tailIP)
+	return ipUint >= head && ipUint <= tail
+}
+
+func init() {
+	// 创建表以存储DHCP租赁信息
+	_, errCreateTbl := DB.Exec(`
+			CREATE TABLE IF NOT EXISTS dhcp_leases (
+				mac_address TEXT PRIMARY KEY,
+				ip_address TEXT,
+				fqdn TEXT,
+				dart_version INTEGER,
+				Expiry TEXT
+			)
+		`)
+	if errCreateTbl != nil {
+		log.Fatalf("Error creating table: %v", errCreateTbl)
+	}
 }
