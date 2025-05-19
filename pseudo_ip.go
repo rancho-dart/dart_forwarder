@@ -38,15 +38,15 @@ type PseudoIpPool struct {
 	mutex     sync.RWMutex
 }
 
-func NewPseudoIpPool(ttl time.Duration) *PseudoIpPool {
-	_, ipNet, err := net.ParseCIDR(PSEUDO_IP_POOL)
+func NewPseudoIpPool(ttl time.Duration, cidr string) *PseudoIpPool {
+	_, ipNet, err := net.ParseCIDR(cidr)
 	if err != nil {
-		log.Panic("invalid PSEUDO_IP_POOL format")
+		log.Panic("invalid CIDR format")
 	}
 	head := ipToUint32(ipNet.IP)
 	mask := binary.BigEndian.Uint32(ipNet.Mask)
 	tail := head | ^mask
-	return &PseudoIpPool{
+	p := &PseudoIpPool{
 		head:      head,
 		tail:      tail,
 		next:      head,
@@ -54,6 +54,8 @@ func NewPseudoIpPool(ttl time.Duration) *PseudoIpPool {
 		domainMap: make(map[string]*PseudoIpEntry),
 		ipMap:     make(map[uint32]*PseudoIpEntry),
 	}
+	p.loadPseudoAddresses() // 新增：自动加载数据库记录
+	return p
 }
 
 // 分配或返回已有伪地址，并刷新时间
@@ -186,7 +188,7 @@ func (p *PseudoIpPool) loadPseudoAddresses() {
 
 		ipInt := ipToUint32(pseudoIP.To4())
 		if p.head > ipInt || ipInt > p.tail {
-			log.Printf("Pseudo IP %s not in pool", pseudoIPStr)
+			// log.Printf("Pseudo IP %s not in pool", pseudoIPStr)
 			continue
 		}
 

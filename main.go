@@ -22,9 +22,6 @@ func main() {
 	}
 	CONFIG = *cfg
 
-	// 加载伪地址分配记录
-	loadPseudoAddresses()
-
 	// 1.启动 Forward 模块
 	var wg sync.WaitGroup
 

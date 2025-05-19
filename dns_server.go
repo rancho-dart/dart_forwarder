@@ -629,7 +629,7 @@ var PSEUDO_POOL *PseudoIpPool
 var DNS_SERVER = NewDNSServer([]int{53})
 
 func startDNSServerModule() {
-	PSEUDO_POOL = NewPseudoIpPool(time.Hour)
+	PSEUDO_POOL = NewPseudoIpPool(time.Hour, PSEUDO_IP_POOL)
 
 	// 创建并启动 DNS Server
 	DNS_SERVER.Start()
