@@ -41,7 +41,6 @@ type LinkInterface struct {
 type UpLinkInterface struct {
 	LinkInterface
 	Name             string   `yaml:"name"`
-	DartDomain       string   `yaml:"dart_domain"`
 	PublicIPResolver []string `yaml:"public_ip_resolver"`
 	DNSServers       []string `yaml:"dns_servers"`
 	_publicIP        net.IP

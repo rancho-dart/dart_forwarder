@@ -116,14 +116,14 @@ func resolveARecord(domain, dnsServer string, depth int) (addrs []net.IP, suppor
 }
 
 func findSubDomainUnder(domain, base string) (string, bool) {
-	domain_t := "." + domain
-	base_t := "." + base
-	if !strings.HasSuffix(domain_t, base_t) {
+	_domain := "." + domain
+	_base := "." + base
+	if !strings.HasSuffix(_domain, _base) {
 		return "", false
 	}
 
 	// 去掉 base 前面的部分，找到前一个 label
-	prefix := strings.TrimSuffix(domain_t, base_t)
+	prefix := strings.TrimSuffix(_domain, _base)
 
 	// 找到最后一个 "."，表示下一个上级域的边界
 	lastDot := strings.LastIndex(prefix, ".")
@@ -132,7 +132,7 @@ func findSubDomainUnder(domain, base string) (string, bool) {
 	}
 
 	// 拼回一个完整的 "xxx.base"
-	return domain_t[lastDot+1:], true
+	return _domain[lastDot+1:], true
 }
 func (s *DNSServer) resolve(fqdn string) (outIfce *LinkInterface, ip net.IP, supportDart bool) {
 	outIfce = s.getOutboundInfo(dns.Fqdn(fqdn)) // Only find in the downlink interfaces!

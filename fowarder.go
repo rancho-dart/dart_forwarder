@@ -198,6 +198,9 @@ NextPacket:
 				break
 			}
 
+			// 这里获取伪地址对应的IP和FQDN。
+			// 在前面的DNS LOOKUP中，我们已经在上联口的DNS SERVER上解析过域名（FQDN）对应的IP并据此分配了伪地址
+			// 所以如果表中能查到，目标域名和其在上联口所在域中的IP是都可以直接得到
 			DstFqdn, DstIP, DstUdpPort, ok := PSEUDO_POOL.Lookup(ip.DstIP)
 			if !ok {
 				log.Printf("[Downlink FORWARD] DstIP %s not found in pseudo ip pool\n", ip.DstIP)
@@ -207,9 +210,11 @@ NextPacket:
 
 			DstFqdn = strings.TrimSuffix(DstFqdn, ".")
 
-			server, ok := DHCP_SERVERS[fr.ifce.Name()]
+			// 现在我们再来确定源FQDN
+			inLI := fr.ifce.Owner.(*DownLinkInterface) // 报文肯定是下联口接收到的
+			server, ok := DHCP_SERVERS[inLI.Name]
 			if !ok || server == nil {
-				log.Printf("[Downlink FORWARD] no DHCP server for interface %s\n", fr.ifce.Name())
+				log.Printf("[Downlink FORWARD] no DHCP server for interface %s\n", inLI.Name)
 				packet.SetVerdict(netfilter.NF_DROP)
 				continue NextPacket
 			}
@@ -223,16 +228,14 @@ NextPacket:
 
 			SrcFqdn := lease.FQDN
 
-			if CONFIG.Uplink.DartDomain == "." {
-				inboundIfce := fr.ifce.Owner.(*DownLinkInterface)
-				if !inboundIfce.RegistedInUplinkDNS {
-					// 如果父域的IPv4根域，那么对于没有注册到DNS系统的设备而言，自己放在DART头中的域名是无法解析为IP的
-					// 解决的办法是将自己的公网IP嵌入DART头的源地址中
-					// 我们用[]作为嵌入IP地址的标志。这两个符号不是合法的域名允许的字符，因此不会被DNS服务器接受为域名
-					// 也不应当将它发送到DNS服务器进行解析
-					ip := CONFIG.Uplink.PublicIP()
-					SrcFqdn = fmt.Sprintf("%s[%d-%d-%d-%d]", SrcFqdn, ip[0], ip[1], ip[2], ip[3])
-				}
+			// 我们已经得到了源FQDN，但对方主机能不能正常解析这个FQDN还有依赖条件：
+			// 只有在上联口的DNS系统中注册过的域名才能被上联口上的DNS正常解析，外面的主机才能查询到这个域名对应的IP
+			// 源地址设置为本地域中的主机才能意义
+			if !inLI.RegistedInUplinkDNS {
+				// 如果下联口的域名没有在上联口的DNS系统中注册过，那么只有一种可能：
+				// 这台设备直接（或者通过NAT）连接到公网（中间没有其他DART网关），那么这时候我们就需要将公网地址嵌入DART的源地址，以便报文接收方知道报文回应给谁
+				_ip := CONFIG.Uplink.PublicIP()
+				SrcFqdn = fmt.Sprintf("%s[%d-%d-%d-%d]", SrcFqdn, _ip[0], _ip[1], _ip[2], _ip[3])
 			}
 
 			dart := &DART{
