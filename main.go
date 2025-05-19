@@ -1,9 +1,7 @@
 package main
 
 import (
-	"database/sql"
 	"log"
-	"os"
 	"sync"
 	"time"
 
@@ -11,45 +9,9 @@ import (
 )
 
 const (
-	DhcpLeaseDB   = "dhcp_leases.sqlite3"
-	DBdir         = "/var/lib/dart"
 	BIG_VERSION   = 1
 	SMALL_VERSION = 0
 )
-
-var globalDB *sql.DB // 新增全局变量，用于存储数据库连接
-
-func initDB() (*sql.DB, error) {
-	// 确保数据库文件所在的目录存在
-	if _, err := os.Stat(DBdir); os.IsNotExist(err) {
-		err := os.MkdirAll(DBdir, 0755)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	// 初始化数据库连接
-	db, errOpenDB := sql.Open("sqlite3", DBdir+"/"+DhcpLeaseDB)
-	if errOpenDB != nil {
-		return nil, errOpenDB
-	}
-
-	// 创建表以存储DHCP租赁信息
-	_, errCreateTbl := db.Exec(`
-			CREATE TABLE IF NOT EXISTS dhcp_leases (
-				mac_address TEXT PRIMARY KEY,
-				ip_address TEXT,
-				fqdn TEXT,
-				dart_version INTEGER,
-				Expiry TEXT
-			)
-		`)
-	if errCreateTbl != nil {
-		return nil, errCreateTbl
-	}
-
-	return db, nil
-}
 
 func main() {
 	log.Printf("DART daemon v%d.%d starting...", BIG_VERSION, SMALL_VERSION)
@@ -60,13 +22,8 @@ func main() {
 	}
 	CONFIG = *cfg
 
-	var errDB error
-	globalDB, errDB = initDB()
-	if errDB != nil {
-		log.Printf("Error initializing database: %v\n", errDB)
-		os.Exit(1)
-	}
-	defer globalDB.Close() // 程序退出时关闭数据库连接
+	// 加载伪地址分配记录
+	loadPseudoAddresses()
 
 	// 1.启动 Forward 模块
 	var wg sync.WaitGroup
