@@ -127,7 +127,7 @@ func findSubDomainUnder(domain, base string) (string, bool) {
 
 	// 找到最后一个 "."，表示下一个上级域的边界
 	lastDot := strings.LastIndex(prefix, ".")
-	if lastDot == -1 { 
+	if lastDot == -1 {
 		return "", false
 	}
 
@@ -301,8 +301,12 @@ func (s *DNSServer) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 							s.respondWithNS(w, r, queriedDomain, ip)
 						} else { // queriedDomin 是 inLI.Domain的子域
 							if inLI.RegistedInUplinkDNS {
-								ip, _ = s.getDhcpLeasedIp(inLI.Name, queriedDomain)
-								s.respondWithNS(w, r, queriedDomain, ip)
+								ip, _, isStatic := s.getDhcpLeasedIp(inLI.Name, queriedDomain)
+								if isStatic {
+									s.respondWithNS(w, r, queriedDomain, ip) // 只允许静态绑定的主机派生出子域
+								} else {
+									s.respondWithSOA(w, r, queriedDomain, false)
+								}
 							} else {
 								s.respondWithSOA(w, r, queriedDomain, false) // 如果当前接口的域并没有注册到上级DNS，那么无法派生出可解析的子域
 							}
@@ -551,21 +555,26 @@ func (s *DNSServer) respondWithServerFailure(w dns.ResponseWriter, r *dns.Msg) {
 	w.WriteMsg(m)
 }
 
-func (s *DNSServer) getDhcpLeasedIp(ifName, domain string) (net.IP, bool) {
+func (s *DNSServer) getDhcpLeasedIp(ifName, domain string) (ip net.IP, supportDart bool, isStatic bool) {
 	dhcpServer, ok := DHCP_SERVERS[ifName]
 	if ok {
-		lease, ok := dhcpServer.leasesByFQDN[domain]
+		lease, ok := dhcpServer.staticLeases[domain] // 先查静态绑定，因为地址分配之后，静态绑定的条目也会被加入分配表中
 		if ok {
-			return lease.IP, lease.DARTVersion > 0
+			return lease.IP, lease.DARTVersion > 0, false
+		} else {
+			lease, ok := dhcpServer.leasesByFQDN[domain]
+			if ok {
+				return lease.IP, lease.DARTVersion > 0, true
+			}
 		}
 	}
-	return nil, false
+	return nil, false, false
 }
 
 // respondWithDHCP 查询 DHCP SERVER 分配的地址并进行响应
 func (s *DNSServer) respondWithDHCP(w dns.ResponseWriter, dnsMsg *dns.Msg, ifName, domain string) {
 
-	ip, supportDart := s.getDhcpLeasedIp(ifName, domain)
+	ip, supportDart, _ := s.getDhcpLeasedIp(ifName, domain)
 	if ip == nil {
 		s.respondWithNxdomain(w, dnsMsg)
 		return

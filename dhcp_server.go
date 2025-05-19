@@ -314,7 +314,7 @@ func (s *DHCPServer) ServeDHCP(p dhcp4.Packet, msgType dhcp4.MessageType, option
 					}
 
 					// write to db
-					log.Printf("Writing to db: mac=%s, ip=%s, dart_version=%d, fqdn=%s, Expiry=%s\n", mac, reqIP.String(), dartVersion, fqdn, time.Now().Add(s.leaseDuration).Format(time.RFC3339))
+					log.Printf("Write to db: mac=%s, ip=%s, dart_version=%d, fqdn=%s, Expiry=%s\n", mac, reqIP.String(), dartVersion, fqdn, time.Now().Add(s.leaseDuration).Format(time.RFC3339))
 					_, err := globalDB.Exec("INSERT OR REPLACE INTO dhcp_leases (mac_address, ip_address, dart_version, fqdn, Expiry) VALUES (?, ?, ?, ?, ?)",
 						mac, reqIP.String(), dartVersion, fqdn, time.Now().Add(s.leaseDuration).Format(time.RFC3339))
 					if err != nil {
@@ -340,6 +340,12 @@ func (s *DHCPServer) ServeDHCP(p dhcp4.Packet, msgType dhcp4.MessageType, option
 				delete(s.leasesByFQDN, fqdn)
 				break
 			}
+		}
+
+		log.Printf("Delete from db: mac=%s, ip=%s", mac, p.CIAddr())
+		_, err := globalDB.Exec("DELETE FROM dhcp_leases WHERE mac_address = ?", mac)
+		if err != nil {
+			log.Printf("Failed to delete lease: %v", err)
 		}
 	}
 	return nil
