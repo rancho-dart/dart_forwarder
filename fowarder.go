@@ -354,7 +354,7 @@ NextPacket:
 			dstFqdn := dns.Fqdn(trimIpSuffix(string(dart.DstFqdn)))
 			srcFqdn := dns.Fqdn(trimIpSuffix(string(dart.SrcFqdn)))
 
-			outIfce, destIp, supportDart := DNS_SERVER.resolve(dstFqdn)
+			outIfce, destIp, supportDart := DNS_SERVER.lookup(dstFqdn)
 			if outIfce == nil || destIp == nil {
 				// 没找到合适的转发接口或目标IP
 				packet.SetVerdict(netfilter.NF_DROP)

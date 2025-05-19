@@ -134,7 +134,8 @@ func findSubDomainUnder(domain, base string) (string, bool) {
 	// 拼回一个完整的 "xxx.base"
 	return _domain[lastDot+1:], true
 }
-func (s *DNSServer) resolve(fqdn string) (outIfce *LinkInterface, ip net.IP, supportDart bool) {
+
+func (s *DNSServer) lookup(fqdn string) (outIfce *LinkInterface, ip net.IP, supportDart bool) {
 	outIfce = s.getOutboundInfo(dns.Fqdn(fqdn)) // Only find in the downlink interfaces!
 	if outIfce != nil {
 		dhcpServer, ok := DHCP_SERVERS[outIfce.Name()]
