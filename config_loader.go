@@ -45,6 +45,7 @@ type UpLinkInterface struct {
 	DNSServers       []string `yaml:"dns_servers"`
 	_publicIP        net.IP
 	ipNet            net.IPNet
+	inRootDomain     bool
 }
 
 type DownLinkInterface struct {
@@ -93,7 +94,21 @@ func (u *UpLinkInterface) lookupNS(domain string) (addrs []net.IP) {
 	return nil
 }
 
-func (u *UpLinkInterface) lookupA(fqdn string) (ip net.IP, supportDart bool) {
+func (u *UpLinkInterface) resolveA(fqdn string) (ip net.IP, supportDart bool) {
+	if u.inRootDomain {
+		// 如果一台DART节点在根域，并且没有将自己注册到根域的DNS系统，那么为了报文能够返回，它会将自己的公网IP嵌入到DART报头的源地址中
+		// 格式是这样的：c1.sh.cn.[A-B-C-D]，其中A.B.C.D是它的公网IP
+		// 如果本设备的上联口直接接入IPv4的根域，那么我们先看看能否从FQDN中解析出IPv4地址
+		parts := strings.Split(fqdn, ".")
+		lastPart := parts[len(parts)-1]
+		ip := make(net.IP, 4)
+		n, err := fmt.Sscanf(lastPart, "[%d-%d-%d-%d]", &ip[0], &ip[1], &ip[2], &ip[3])
+		if err == nil && n == 4 {
+			return ip, true
+		}
+		// 如果解析失败，说明fqdn中没有嵌入IP。那就进入正常的DNS解析流程
+	}
+
 	for _, dnsServer := range u.DNSServers {
 		IPAddresses, supportDart, err := resolveARecord(fqdn, dnsServer, 0)
 		if err != nil {
@@ -114,7 +129,7 @@ func (u *UpLinkInterface) probeLocation(domain string) string {
 
 	for {
 		query := "dart-gateway." + domain
-		ip, suppDart := u.lookupA(query)
+		ip, suppDart := u.resolveA(query)
 		if ip != nil && suppDart {
 			return domain
 		}
@@ -251,6 +266,7 @@ func LoadConfig() (*Config, error) {
 
 			publicIP := cfg.Uplink.PublicIP()
 			if publicIP != nil {
+				cfg.Uplink.inRootDomain = true
 				log.Printf("Warning: domain [%s] configured on interface [%s] isn't delegated by dns server(s) on uplink interface. Will use public IP [%s] as DART source address", dl.Domain, dl.Name, publicIP)
 			} else {
 				log.Fatalf("Domain [%s] configured on interface [%s] isn't delegated by dns server(s) on uplink interface, and the public IP of uplink interface is not available. Please check your configuration.", dl.Domain, dl.Name)

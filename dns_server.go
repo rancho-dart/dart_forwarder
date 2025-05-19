@@ -245,7 +245,7 @@ func (s *DNSServer) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 					}
 				}
 
-				ipInParentDomain, queriedSupportDart := outLI.lookupA(queriedDomain)
+				ipInParentDomain, queriedSupportDart := outLI.resolveA(queriedDomain)
 				if ipInParentDomain == nil {
 					s.respondWithNxdomain(w, r)
 					return
