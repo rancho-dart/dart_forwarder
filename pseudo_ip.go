@@ -147,6 +147,7 @@ func (p *PseudoIpPool) CleanupExpired() {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
+	log.Printf("Cleaning up expired pseudo addresses...")
 	now := time.Now()
 	for ipInt, entry := range p.ipMap {
 		if now.Sub(entry.LastUsedAt) > p.ttl {
