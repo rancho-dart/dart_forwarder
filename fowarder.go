@@ -43,17 +43,17 @@ func (fr *ForwardRoutine) Run() {
 	switch fr.ifce.Owner.(type) {
 	case *UpLinkInterface:
 		log.Println("uplink input processing start")
-		fr.processUplinkInputPackets()
+		fr.processUplink_Nat_and_Forward()
 		log.Println("uplink forward processing end")
 	case *DownLinkInterface:
 		switch fr.style {
 		case Input:
 			log.Println("Downlink DART FORWARD processing start")
-			fr.processDownlinkInputPackets()
+			fr.processDownlink_DartForward()
 			log.Println("Downlink DART FORWARD processing end")
 		case Forward:
 			log.Println("Downlink NAT-4-DART processing start")
-			fr.processDownlinkForwardPackets()
+			fr.processDownlink_Nat_4_Dart()
 			log.Println("Downlink NAT-4-DART processing end")
 		}
 	}
@@ -72,7 +72,7 @@ func (fr *ForwardRoutine) SendPacket(ifce *LinkInterface, DstIP net.IP, packet [
 	return syscall.Sendto(fr.sock, packet, 0, &addr)
 }
 
-func (fr *ForwardRoutine) processDownlinkInputPackets() {
+func (fr *ForwardRoutine) processDownlink_DartForward() {
 	for packet := range fr.queue.GetPackets() {
 		ipLayer := packet.Packet.Layer(layers.LayerTypeIPv4)
 		if ipLayer != nil {
@@ -180,7 +180,7 @@ func (fr *ForwardRoutine) handleExceededMTU(packetLen int, ipOfLongPkt *layers.I
 	log.Printf("[Downlink NAT-4-DART] ICMP 'packet too long' replied to sender. Suggested MTU: %d", suggestMTU)
 	return nil
 }
-func (fr *ForwardRoutine) processDownlinkForwardPackets() {
+func (fr *ForwardRoutine) processDownlink_Nat_4_Dart() {
 	// 这里处理来自downlink发往伪地址的报文。因为是发往伪地址，这些报文会进入FORWARD队列。报文的去向，必须是CONFIG.Uplink方向（目前我们
 	// 只实现这个）。这些报文进来的时候没有DART封装，我们要根据伪地址查出目标主机的FQDN和真实IP（也没有那么真实，其实是上联接口所
 	// 在域中的地址），给报文加上DART报头，设置IP层头的DstIP为真实IP，然后转发给目标主机。
@@ -309,7 +309,7 @@ func trimIpSuffix(s string) string {
 	}
 	return s
 }
-func (fr *ForwardRoutine) processUplinkInputPackets() {
+func (fr *ForwardRoutine) processUplink_Nat_and_Forward() {
 	// 这里处理来自CONFIG.Uplink的报文
 	// 从这个接口进来的报文，只有DART封装的需要转发，其他的都透明通过
 	// 报文的去向，必须是downlink方向
