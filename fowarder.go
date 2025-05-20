@@ -386,7 +386,7 @@ NextPacket:
 				err = gopacket.SerializeLayers(buff, opts,
 					ip, udp, dart, gopacket.Payload(dart.Payload))
 
-				log.Printf("[%s] Forward packet to %s(%s)", pktStyle, dstFqdn, dstIp)
+				log.Printf("[%s] Forward packet from %s(%s) to %s(%s)", pktStyle, dart.SrcFqdn, ip.SrcIP, dstFqdn, dstIp)
 			} else { // dest host doesn't support DART
 				pktStyle = "Uplink NAT-DART-4"
 				// 删除 DART 报头和UDP报头
