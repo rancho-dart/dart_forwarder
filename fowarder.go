@@ -356,7 +356,7 @@ NextPacket:
 			// Now the dstFqdn may looks like c1.sh.cn.[192-168-2.100]
 			// We need to check it. If the last part is a ip address, we need to remove it.
 			dstFqdn := dns.Fqdn(trimIpSuffix(string(dart.DstFqdn)))
-			srcFqdn := dns.Fqdn(trimIpSuffix(string(dart.SrcFqdn)))
+			// srcFqdn := dns.Fqdn(trimIpSuffix(string(dart.SrcFqdn)))
 
 			outIfce, dstIp, supportDart := DNS_SERVER.lookup(dstFqdn)
 			if outIfce == nil || dstIp == nil {
@@ -391,7 +391,7 @@ NextPacket:
 				pktStyle = "Uplink NAT-DART-4"
 				// 删除 DART 报头和UDP报头
 				ip.DstIP = dstIp
-				ip.SrcIP = PSEUDO_POOL.FindOrAllocate(srcFqdn, ip.SrcIP, uint16(udp.SrcPort))
+				ip.SrcIP = PSEUDO_POOL.FindOrAllocate(string(dart.SrcFqdn), ip.SrcIP, uint16(udp.SrcPort))
 				// ip.SrcIP = outIfce.IPAddress[:]
 				ip.Protocol = dart.Protocol
 
