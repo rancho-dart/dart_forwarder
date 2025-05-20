@@ -257,19 +257,23 @@ func LoadConfig() (*Config, error) {
 			}
 		}
 
-		if !dl.RegistedInUplinkDNS {
-			DartDomain := cfg.Uplink.probeLocation(dl.Domain)
-			if DartDomain != "" {
-				log.Printf("We are in DART domain: [%s]", DartDomain)
-				log.Fatalf("Sub-DART-domain not allowed in undelegated DART domain. Exit.")
-			}
+		DartDomain := cfg.Uplink.probeLocation(dl.Domain)
+
+		if DartDomain == "" {
+			log.Printf("The uplink interface of this device is connected to root domain of Internet IPv4.")
+			cfg.Uplink.inRootDomain = true
 
 			publicIP := cfg.Uplink.PublicIP()
 			if publicIP != nil {
-				cfg.Uplink.inRootDomain = true
 				log.Printf("Warning: domain [%s] configured on interface [%s] isn't delegated by dns server(s) on uplink interface. Will use public IP [%s] as DART source address", dl.Domain, dl.Name, publicIP)
 			} else {
 				log.Fatalf("Domain [%s] configured on interface [%s] isn't delegated by dns server(s) on uplink interface, and the public IP of uplink interface is not available. Please check your configuration.", dl.Domain, dl.Name)
+			}
+		} else {
+			log.Printf("The uplink interface of this device is connected to DART domain: [%s]", DartDomain)
+
+			if !dl.RegistedInUplinkDNS {
+				log.Fatalf("Sub-DART-domain not allowed in undelegated DART domain. Exit.")
 			}
 		}
 
