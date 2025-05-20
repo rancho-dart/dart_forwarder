@@ -128,17 +128,17 @@ func (u *UpLinkInterface) probeLocation(domain string) string {
 	domain = strings.TrimSuffix(domain, ".") // 去除末尾的点，标准化格式
 
 	for {
-		query := "dart-gateway." + domain
-		ip, suppDart := u.resolveA(query)
-		if ip != nil && suppDart {
-			return domain
-		}
-
 		// 向上一级域回退
 		if i := strings.Index(domain, "."); i >= 0 {
 			domain = domain[i+1:]
 		} else {
 			break // 没有更多的父域了
+		}
+
+		query := "dart-gateway." + domain
+		ip, suppDart := u.resolveA(query)
+		if ip != nil && suppDart {
+			return domain
 		}
 	}
 
@@ -263,11 +263,13 @@ func LoadConfig() (*Config, error) {
 			log.Printf("The uplink interface of this device is connected to root domain of Internet IPv4.")
 			cfg.Uplink.inRootDomain = true
 
-			publicIP := cfg.Uplink.PublicIP()
-			if publicIP != nil {
-				log.Printf("Warning: domain [%s] configured on interface [%s] isn't delegated by dns server(s) on uplink interface. Will use public IP [%s] as DART source address", dl.Domain, dl.Name, publicIP)
-			} else {
-				log.Fatalf("Domain [%s] configured on interface [%s] isn't delegated by dns server(s) on uplink interface, and the public IP of uplink interface is not available. Please check your configuration.", dl.Domain, dl.Name)
+			if !dl.RegistedInUplinkDNS {
+				publicIP := cfg.Uplink.PublicIP()
+				if publicIP != nil {
+					log.Printf("Warning: domain [%s] configured on interface [%s] isn't delegated by dns server(s) on uplink interface. Will use public IP [%s] as DART source address", dl.Domain, dl.Name, publicIP)
+				} else {
+					log.Fatalf("Domain [%s] configured on interface [%s] isn't delegated by dns server(s) on uplink interface, and the public IP of uplink interface is not available. Please check your configuration.", dl.Domain, dl.Name)
+				}
 			}
 		} else {
 			log.Printf("The uplink interface of this device is connected to DART domain: [%s]", DartDomain)
