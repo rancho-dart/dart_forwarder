@@ -629,7 +629,7 @@ var PSEUDO_POOL *PseudoIpPool
 var DNS_SERVER = NewDNSServer([]int{53})
 
 func startDNSServerModule() {
-	PSEUDO_POOL = NewPseudoIpPool(time.Hour, PSEUDO_IP_POOL)
+	PSEUDO_POOL = NewPseudoIpPool(time.Hour, PSEUDO_IP_POOL) // 当前给地址池设置的TTL为1小时。1小时内保证不会被清理。两种情况下会启动地址池清理：1.地址池耗竭；2.每天凌晨3点。
 
 	// 创建并启动 DNS Server
 	DNS_SERVER.Start()

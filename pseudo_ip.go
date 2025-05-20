@@ -55,6 +55,20 @@ func NewPseudoIpPool(ttl time.Duration, cidr string) *PseudoIpPool {
 		ipMap:     make(map[uint32]*PseudoIpEntry),
 	}
 	p.loadPseudoAddresses() // 新增：自动加载数据库记录
+
+	// 新增：设置定时任务，每天凌晨3点执行CleanupExpired
+	go func() {
+		for {
+			now := time.Now()
+			nextRun := time.Date(now.Year(), now.Month(), now.Day(), 3, 0, 0, 0, time.Local)
+			if nextRun.Before(now) {
+				nextRun = nextRun.Add(24 * time.Hour)
+			}
+			time.Sleep(nextRun.Sub(now))
+			p.CleanupExpired()
+		}
+	}()
+
 	return p
 }
 
@@ -72,29 +86,39 @@ func (p *PseudoIpPool) FindOrAllocate(domain string, realIP net.IP, udpport uint
 	}
 
 	// 分配新地址
-	for i := uint32(0); i <= p.tail-p.head; i++ {
-		ipInt := p.head + ((p.next - p.head + i) % (p.tail - p.head + 1))
-		if _, used := p.ipMap[ipInt]; !used {
-			pseudoIP := uint32ToIP(ipInt)
-			entry := &PseudoIpEntry{
-				Domain:     domain,
-				PseudoIP:   pseudoIP,
-				RealIP:     realIP,
-				udpPort:    udpport,
-				LastUsedAt: time.Now(),
+	cleaned := false
+	for {
+		for i := uint32(0); i <= p.tail-p.head; i++ {
+			ipInt := p.head + ((p.next - p.head + i) % (p.tail - p.head + 1))
+			if _, used := p.ipMap[ipInt]; !used {
+				pseudoIP := uint32ToIP(ipInt)
+				entry := &PseudoIpEntry{
+					Domain:     domain,
+					PseudoIP:   pseudoIP,
+					RealIP:     realIP,
+					udpPort:    udpport,
+					LastUsedAt: time.Now(),
+				}
+				p.domainMap[domain] = entry
+				p.ipMap[ipInt] = entry
+				p.next = ipInt + 1
+				p.mutex.Unlock()
+				// 新增：同步数据库
+				if err := p.assignPseudoAddress(domain, pseudoIP.String(), realIP.String(), entry.udpPort); err != nil {
+					log.Printf("Failed to assign pseudo address for %s: %v", domain, err)
+				}
+				p.mutex.Lock()
+				return pseudoIP
 			}
-			p.domainMap[domain] = entry
-			p.ipMap[ipInt] = entry
-			p.next = ipInt + 1
-			p.mutex.Unlock()
-			// 新增：同步数据库
-			if err := p.assignPseudoAddress(domain, pseudoIP.String(), realIP.String(), entry.udpPort); err != nil {
-				log.Printf("Failed to assign pseudo address for %s: %v", domain, err)
-			}
-			p.mutex.Lock()
-			return pseudoIP
 		}
+
+		if cleaned {
+			break
+		}
+		p.CleanupExpired()
+		cleaned = true
 	}
+
 	return nil // 地址池耗尽
 }
 
