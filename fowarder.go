@@ -223,14 +223,14 @@ NextPacket:
 				continue NextPacket
 			}
 
+			var SrcFqdn string
 			lease, ok := server.leasesByIp[ip.SrcIP.String()]
 			if !ok {
-				log.Printf("[Downlink NAT-4-DART] no lease for IP %s\n", ip.SrcIP)
-				packet.SetVerdict(netfilter.NF_DROP)
-				continue NextPacket
+				// 源主机的IP不是通过DHCP获得的（DHCP/DNS系统中没有此主机的记录），我们用其IP构筑其DART的源地址
+				SrcFqdn = fmt.Sprintf("[%d-%d-%d-%d].%s", ip.SrcIP[0], ip.SrcIP[1], ip.SrcIP[2], ip.SrcIP[3], inLI.Domain)
+			} else {
+				SrcFqdn = lease.FQDN
 			}
-
-			SrcFqdn := lease.FQDN
 
 			// 我们已经得到了源FQDN，但对方主机能不能正常解析这个FQDN还有依赖条件：
 			// 只有在上联口的DNS系统中注册过的域名才能被上联口上的DNS正常解析，外面的主机才能查询到这个域名对应的IP
@@ -358,9 +358,30 @@ NextPacket:
 			dstFqdn := dns.Fqdn(trimIpSuffix(string(dart.DstFqdn)))
 			// srcFqdn := dns.Fqdn(trimIpSuffix(string(dart.SrcFqdn)))
 
+			// 我们先试着从DHCP分配记录里寻找域名对应的IP
 			outIfce, dstIp, supportDart := DNS_SERVER.lookup(dstFqdn)
-			if outIfce == nil || dstIp == nil {
+			if outIfce == nil {
 				// 没找到合适的转发接口或目标IP
+				packet.SetVerdict(netfilter.NF_DROP)
+				continue NextPacket
+			}
+
+			if dstIp == nil {
+				// DHCP分配表里没有，我们再尝试从域名本身解析出IP
+				oi := outIfce.Owner.(*DownLinkInterface)
+				hostname := strings.TrimSuffix(dstFqdn, "."+oi.Domain)
+				var ip net.IP = make(net.IP, 4)
+				if !strings.Contains(hostname, ".") {
+					n, _ := fmt.Sscanf(hostname, "[%d-%d-%d-%d]", &ip[0], &ip[1], &ip[2], &ip[3])
+					if n == 4 {
+						dstIp = ip
+					}
+				}
+			}
+
+			if dstIp == nil {
+				// 还是没能解析出目标IP，只能放弃
+				log.Printf("[%s] Failed to find dst ip for %s\n", pktStyle, dstFqdn)
 				packet.SetVerdict(netfilter.NF_DROP)
 				continue NextPacket
 			}

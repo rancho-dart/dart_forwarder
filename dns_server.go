@@ -152,6 +152,7 @@ func (s *DNSServer) lookup(fqdn string) (outIfce *LinkInterface, ip net.IP, supp
 				}
 			}
 		}
+		return outIfce, nil, false
 	}
 	return nil, nil, false
 }
