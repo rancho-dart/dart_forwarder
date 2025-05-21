@@ -129,6 +129,7 @@ func findSubDomainUnder(domain, base string) (string, bool) {
 	// 找到最后一个 "."，表示下一个上级域的边界
 	lastDot := strings.LastIndex(prefix, ".")
 	if lastDot == -1 {
+		// 这是domain==base的情况
 		return "", false
 	}
 
@@ -274,7 +275,7 @@ func (s *DNSServer) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 					}
 				} else {
 					// 如果被查询方不支持DART，则以真实地址作答，后面转发时会进行NAT44转换。对于SOA和NS查询当以父域的记录作答
-					s.respondWithForwardQuery(w, r)
+					s.respondWithForwardQuery(w, r, CONFIG.Uplink.DNSServers)
 					return
 				}
 			case *DownLinkInterface:
@@ -286,17 +287,18 @@ func (s *DNSServer) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 					return
 				}
 
-				level1SubDomain, ok := findSubDomainUnder(queriedDomain, outLI.Domain)
-				if !ok {
-					// 能够走到这里，查询的域名应当属于出接口的域，所以不可能不ok
-					s.respondWithServerFailure(w, r)
-					return
-				}
+				if outLI.Domain != queriedDomain {
+					level1SubDomain, ok := findSubDomainUnder(queriedDomain, outLI.Domain)
+					if !ok {
+						s.respondWithServerFailure(w, r)
+						return
+					}
 
-				if level1SubDomain != queriedDomain {
-					// 这是下联口域中主机查询下联口域的子域
-					s.respondWithDelegate(w, r, outLI.Name, level1SubDomain)
-					return
+					if level1SubDomain != queriedDomain {
+						// 这是下联口域中主机查询下联口域的子域
+						s.respondWithDelegate(w, r, outLI.Name, level1SubDomain)
+						return
+					}
 				}
 
 				switch Qtype {
@@ -344,7 +346,8 @@ func (s *DNSServer) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 func (s *DNSServer) respondWithDelegate(w dns.ResponseWriter, r *dns.Msg, name string, level1SubDomain string) {
 	ip, _, _, isDelegated := s.getDhcpLeasedIp(name, level1SubDomain)
 	if isDelegated && ip != nil {
-		s.respondWithNS(w, r, level1SubDomain, ip, false)
+		// s.respondWithNS(w, r, level1SubDomain, ip, false) // 直接返回NS记录符合规范，但查询方并不会去递归解析，所以我们要返回A记录
+		s.respondWithForwardQuery(w, r, []string{ip.String()})
 	} else {
 		s.respondWithSOA(w, r, level1SubDomain, false)
 	}
@@ -392,8 +395,8 @@ func forwardQuery(r *dns.Msg, upstream string) (*dns.Msg, error) {
 	}
 	return resp, nil
 }
-func (s *DNSServer) respondWithForwardQuery(w dns.ResponseWriter, r *dns.Msg) {
-	for _, dnsServer := range CONFIG.Uplink.DNSServers {
+func (s *DNSServer) respondWithForwardQuery(w dns.ResponseWriter, r *dns.Msg, DNSServers []string) {
+	for _, dnsServer := range DNSServers {
 		resp, err := forwardQuery(r, dnsServer)
 		if err == nil {
 			// 将上游响应直接写回客户端
