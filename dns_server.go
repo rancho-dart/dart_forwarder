@@ -13,6 +13,7 @@ import (
 const (
 	DART_GATEWAY_PREFIX = "dart-gateway."
 	DART_HOST_PREFIX    = "dart-host."
+	NAME_SERVER_PREFIX  = "ns."
 )
 
 // DNSServer 结构体，用于管理 DNS 服务
@@ -178,6 +179,25 @@ func (s *DNSServer) startServer(port int) {
 	}
 }
 
+func (s *DNSServer) respondAsDomainAgent(Qtype uint16, queriedDomain string, outLI *DownLinkInterface, inLI *LinkInterface, w dns.ResponseWriter, r *dns.Msg) {
+	switch Qtype {
+	case dns.TypeA:
+		if queriedDomain == outLI.Domain || queriedDomain == DART_GATEWAY_PREFIX+outLI.Domain || queriedDomain == NAME_SERVER_PREFIX+outLI.Domain {
+			s.respondWithDartGateway(w, r, queriedDomain, outLI.Domain, inLI.ipNet().IP, false) // 如果查询的是网关本身，那么返回不带CNAME的网关地址（因为网关本身不支持DART协议栈:-) ）
+		} else {
+			s.respondWithDartGateway(w, r, queriedDomain, outLI.Domain, inLI.ipNet().IP, true) // 从父域查询子域的A记录，一律以上联口的IP作答
+		}
+	case dns.TypeSOA:
+		s.respondWithSOA(w, r, queriedDomain, queriedDomain == outLI.Domain) // 从父域查询子域的SOA记录，假如是子域，则回答SOA记录
+	case dns.TypeNS:
+		if queriedDomain == outLI.Domain {
+			s.respondWithNS(w, r, queriedDomain, inLI.ipNet().IP, true) // 从父域查询子域的NS记录。一律回答“我就是该域的名字服务器”
+		} else {
+			s.respondWithSOA(w, r, queriedDomain, false)
+		}
+	}
+}
+
 // ServeDNS 处理 DNS 查询
 func (s *DNSServer) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 
@@ -188,6 +208,7 @@ func (s *DNSServer) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 
 		clientIp, inboundIfce := s.getInboundInfo(w)
 
+		// 先处理反查域名的请求
 		if Qtype == dns.TypePTR && r.Question[0].Qclass == dns.ClassINET {
 			rIP := net.ParseIP(strings.TrimSuffix(queriedDomain, ".in-addr.arpa.")).To4()
 			if rIP != nil {
@@ -217,21 +238,7 @@ func (s *DNSServer) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 				s.respondWithRefusal(w, r) // 从父域查询父域的记录，理论上不会发给我。假如收到，一律拒绝。
 				return
 			case *DownLinkInterface:
-				switch Qtype {
-				case dns.TypeA:
-					s.respondWithDartGateway(w, r, queriedDomain, outLI.Domain, inLI.ipNet.IP, true) // 从父域查询子域的A记录，一律以上联口的IP作答
-					return
-				case dns.TypeSOA:
-					s.respondWithSOA(w, r, queriedDomain, queriedDomain == outLI.Domain) // 从父域查询子域的SOA记录，假如是子域，则回答SOA记录
-					return
-				case dns.TypeNS:
-					if queriedDomain == outLI.Domain {
-						s.respondWithNS(w, r, queriedDomain, inLI.ipNet.IP) // 从父域查询子域的NS记录。一律回答“我就是该域的名字服务器”
-					} else {
-						s.respondWithSOA(w, r, queriedDomain, false)
-					}
-					return
-				}
+				s.respondAsDomainAgent(Qtype, queriedDomain, outLI, &inLI.LinkInterface, w, r)
 			}
 		case *DownLinkInterface:
 			switch outLI := outboundIfce.Owner.(type) {
@@ -272,61 +279,75 @@ func (s *DNSServer) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 				}
 			case *DownLinkInterface:
 				// 这是子域查询子域的记录
+
+				if outLI.Name != inLI.Name {
+					// 从一个子域查询另一个子域的记录
+					s.respondAsDomainAgent(Qtype, queriedDomain, outLI, &inLI.LinkInterface, w, r)
+					return
+				}
+
+				level1SubDomain, ok := findSubDomainUnder(queriedDomain, outLI.Domain)
+				if !ok {
+					// 能够走到这里，查询的域名应当属于出接口的域，所以不可能不ok
+					s.respondWithServerFailure(w, r)
+					return
+				}
+
+				if level1SubDomain != queriedDomain {
+					// 这是下联口域中主机查询下联口域的子域
+					s.respondWithDelegate(w, r, outLI.Name, level1SubDomain)
+					return
+				}
+
 				switch Qtype {
 				case dns.TypeA:
-					if inLI.Name == outLI.Name {
-						// 同一子域内的主机互相查询，直接返回DHCP分配的IP地址
-						if queriedDomain == DART_GATEWAY_PREFIX+inLI.Domain {
-							s.respondWithDartGateway(w, r, queriedDomain, inLI.Domain, inLI.ipNet.IP, false)
-							return
-						} else if queriedDomain == inLI.Domain || queriedDomain == "ns."+inLI.Domain {
-							s.respondWithDartGateway(w, r, queriedDomain, inLI.Domain, inLI.ipNet.IP, true)
-						} else {
-							s.respondWithDHCP(w, r, inLI.Name, queriedDomain)
-							return
-						}
+					// 同一子域内的主机互相查询，直接返回DHCP分配的IP地址
+					if queriedDomain == inLI.Domain || queriedDomain == DART_GATEWAY_PREFIX+inLI.Domain || queriedDomain == NAME_SERVER_PREFIX+inLI.Domain {
+						s.respondWithDartGateway(w, r, queriedDomain, inLI.Domain, inLI.ipNet.IP, false)
+						return
 					} else {
-						// 这是两个子域之间的横向流量，我们直接返回网关地址。理论上直接交给操作系统转发也是可以的。所以我们返回入口网关地址
-						s.respondWithDartGateway(w, r, queriedDomain, inLI.Domain, inLI.ipNet.IP, true)
+						s.respondWithLeasedIP(w, r, inLI.Name, queriedDomain)
 						return
 					}
 				case dns.TypeSOA:
 					s.respondWithSOA(w, r, queriedDomain, queriedDomain == outLI.Domain) // 从子域查询子域的SOA记录。一律回答“我就是该域的权威服务器”
 					return
 				case dns.TypeNS:
-					if inLI.Name == outLI.Name {
-						// 同一个接口，意味着同一个DART域。
-						var ip net.IP
-						if inLI.Domain == queriedDomain {
-							ip = inLI.ipNet.IP
-							s.respondWithNS(w, r, queriedDomain, ip)
-						} else { // queriedDomin 是 inLI.Domain的子域
-							if inLI.RegistedInUplinkDNS {
-								ip, _, isStatic := s.getDhcpLeasedIp(inLI.Name, queriedDomain)
-								if isStatic {
-									s.respondWithNS(w, r, queriedDomain, ip) // 只允许静态绑定的主机派生出子域
-								} else {
-									s.respondWithSOA(w, r, queriedDomain, false)
-								}
+					// 同一个接口，意味着同一个DART域。
+					var ip net.IP
+					if inLI.Domain == queriedDomain {
+						ip = inLI.ipNet.IP
+						s.respondWithNS(w, r, queriedDomain, ip, true)
+					} else { // queriedDomin 是 inLI.Domain域内的主机
+						if inLI.RegistedInUplinkDNS {
+							ip, _, _, delegated := s.getDhcpLeasedIp(inLI.Name, queriedDomain)
+							if delegated {
+								s.respondWithNS(w, r, queriedDomain, ip, true) // 这个域名被委派了子域，以NS作答
 							} else {
-								s.respondWithSOA(w, r, queriedDomain, false) // 如果当前接口的域并没有注册到上级DNS，那么无法派生出可解析的子域
+								// 是域内的主机，但并没有派生出子域
+								s.respondWithSOA(w, r, queriedDomain, false)
 							}
-						}
-						return
-					} else {
-						if queriedDomain == outLI.Domain {
-							s.respondWithNS(w, r, queriedDomain, inLI.ipNet.IP)
 						} else {
+							// 如果当前接口的域并没有注册到上级DNS，那么无法派生出可解析的子域（因为如果允许，那么其发出的报文的DART源地址无法解析到正确的IP）
 							s.respondWithSOA(w, r, queriedDomain, false)
 						}
-						return
 					}
+					return
 				}
 			}
 		}
 	}
 
 	s.respondWithNotImplemented(w, r)
+}
+
+func (s *DNSServer) respondWithDelegate(w dns.ResponseWriter, r *dns.Msg, name string, level1SubDomain string) {
+	ip, _, _, isDelegated := s.getDhcpLeasedIp(name, level1SubDomain)
+	if isDelegated && ip != nil {
+		s.respondWithNS(w, r, level1SubDomain, ip, false)
+	} else {
+		s.respondWithSOA(w, r, level1SubDomain, false)
+	}
 }
 
 func (s *DNSServer) respondWithPtr(w dns.ResponseWriter, r *dns.Msg, queriedReverseName string, hostname string) {
@@ -385,7 +406,7 @@ func (s *DNSServer) respondWithForwardQuery(w dns.ResponseWriter, r *dns.Msg) {
 	s.respondWithServerFailure(w, r)
 }
 
-func (s *DNSServer) respondWithNS(w dns.ResponseWriter, r *dns.Msg, domain string, ip net.IP) {
+func (s *DNSServer) respondWithNS(w dns.ResponseWriter, r *dns.Msg, domain string, ip net.IP, nsQueried bool) {
 	m := new(dns.Msg)
 	m.SetReply(r)
 	m.Authoritative = true
@@ -399,7 +420,15 @@ func (s *DNSServer) respondWithNS(w dns.ResponseWriter, r *dns.Msg, domain strin
 		},
 		Ns: "ns." + domain,
 	}
-	m.Answer = append(m.Answer, ns)
+
+	if nsQueried {
+		// 如果客户查询的是NS记录，那么放在Answer区
+		m.Answer = append(m.Answer, ns)
+	} else {
+		// 如果是因为客户实际查询的是被委托区域的域名，服务器必须返回NS记录以告知查询方：你查询的域名由这台NS服务器来解析。
+		// 此时我们就应该将NS记录放在Ns区
+		m.Ns = append(m.Ns, ns)
+	}
 
 	glue := &dns.A{
 		Hdr: dns.RR_Header{
@@ -464,13 +493,14 @@ func (s *DNSServer) getInboundInfo(w dns.ResponseWriter) (clientIP net.IP, inbou
 	return clientIP, &CONFIG.Uplink.LinkInterface
 }
 
-// getOutboundInfo 找到与域名最长匹配的接口
+// getOutboundInfo
 func (s *DNSServer) getOutboundInfo(domain string) *LinkInterface {
 	var Match *DownLinkInterface
 
 	for i, iface := range CONFIG.Downlinks {
 		if strings.HasSuffix("."+domain, "."+iface.Domain) {
 			Match = &CONFIG.Downlinks[i]
+			break
 		}
 	}
 
@@ -509,19 +539,22 @@ func (s *DNSServer) respondWithPseudoIp(w dns.ResponseWriter, r *dns.Msg, domain
 	s.respondWithIP(w, r, domain, pseudoIp)
 }
 
-func (s *DNSServer) respondWithDartGateway(w dns.ResponseWriter, r *dns.Msg, domain string, gwDomain string, gwIP net.IP, withCName bool) {
+func (s *DNSServer) respondWithDartGateway(w dns.ResponseWriter, r *dns.Msg, domain string, gwdomain string, gwIP net.IP, withCName bool) {
 	m := new(dns.Msg)
 	m.SetReply(r)
 	m.Authoritative = true
 
-	AName := DART_GATEWAY_PREFIX + gwDomain
+	var AName string
 
 	if withCName {
+		AName = DART_GATEWAY_PREFIX + gwdomain
 		cname := &dns.CNAME{
 			Hdr:    dns.RR_Header{Name: domain, Rrtype: dns.TypeCNAME, Class: dns.ClassINET, Ttl: 60},
 			Target: AName,
 		}
 		m.Answer = append(m.Answer, cname)
+	} else {
+		AName = domain
 	}
 
 	a := &dns.A{
@@ -556,26 +589,34 @@ func (s *DNSServer) respondWithServerFailure(w dns.ResponseWriter, r *dns.Msg) {
 	w.WriteMsg(m)
 }
 
-func (s *DNSServer) getDhcpLeasedIp(ifName, domain string) (ip net.IP, supportDart bool, isStatic bool) {
+func (s *DNSServer) getDhcpLeasedIp(ifName, domain string) (ip net.IP, supportDart bool, isStatic bool, delegated bool) {
 	dhcpServer, ok := DHCP_SERVERS[ifName]
 	if ok {
-		lease, ok := dhcpServer.staticLeases[domain] // 先查静态绑定，因为地址分配之后，静态绑定的条目也会被加入分配表中
-		if ok {
-			return lease.IP, lease.DARTVersion > 0, false
-		} else {
-			lease, ok := dhcpServer.leasesByFQDN[domain]
-			if ok {
-				return lease.IP, lease.DARTVersion > 0, true
+		// lease, ok := dhcpServer.staticLeases[domain] // 先查静态绑定，因为地址分配之后，静态绑定的条目也会被加入分配表中
+		var staticLease *leaseInfo
+		for _, lease := range dhcpServer.staticLeases {
+			if lease.FQDN == domain {
+				staticLease = &lease
+				break
 			}
 		}
+
+		if staticLease != nil {
+			return staticLease.IP, staticLease.DARTVersion > 0, true, staticLease.Delegated
+		}
+
+		lease, ok := dhcpServer.leasesByFQDN[domain]
+		if ok {
+			return lease.IP, lease.DARTVersion > 0, true, false
+		}
 	}
-	return nil, false, false
+	return nil, false, false, false
 }
 
-// respondWithDHCP 查询 DHCP SERVER 分配的地址并进行响应
-func (s *DNSServer) respondWithDHCP(w dns.ResponseWriter, dnsMsg *dns.Msg, ifName, domain string) {
-
-	ip, supportDart, _ := s.getDhcpLeasedIp(ifName, domain)
+// respondWithLeasedIP 查询 DHCP SERVER 分配的地址并进行响应
+func (s *DNSServer) respondWithLeasedIP(w dns.ResponseWriter, dnsMsg *dns.Msg, ifName, domain string) {
+	// TODO: 这里要区分是本域的还是子域的域名
+	ip, supportDart, _, delegated := s.getDhcpLeasedIp(ifName, domain)
 	if ip == nil {
 		s.respondWithNxdomain(w, dnsMsg)
 		return
@@ -586,7 +627,7 @@ func (s *DNSServer) respondWithDHCP(w dns.ResponseWriter, dnsMsg *dns.Msg, ifNam
 	m.SetReply(dnsMsg)
 	m.Authoritative = true
 
-	if supportDart {
+	if supportDart && !delegated { // 当前实现比较简单，所有DART网关本身还不支持DART协议
 		// Example:
 		// root@c1:~# dig +noall +answer  c1.sh.cn
 		// c1.sh.cn.               60      IN      CNAME   dart-host.c1.sh.cn.

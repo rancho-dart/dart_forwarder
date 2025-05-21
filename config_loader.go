@@ -32,6 +32,7 @@ type StaticBinding struct {
 	IP          string `yaml:"ip"`
 	FQDN        string `yaml:"fqdn,omitempty"`
 	DARTVersion int    `yaml:"dart_version,omitempty"`
+	DELEGATED   bool   `yaml:"delegated,omitempty"`
 }
 
 type LinkInterface struct {
@@ -163,6 +164,16 @@ func (li *LinkInterface) Addr() net.IP {
 		return v.ipNet.IP
 	}
 	return nil
+}
+
+func (li *LinkInterface) ipNet() net.IPNet {
+	switch v := li.Owner.(type) {
+	case *DownLinkInterface:
+		return v.ipNet
+	case *UpLinkInterface:
+		return v.ipNet
+	}
+	return net.IPNet{}
 }
 
 func findIpNetsOfIfce(ifName string) ([]net.IPNet, error) {

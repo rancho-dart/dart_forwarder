@@ -36,6 +36,7 @@ type leaseInfo struct {
 	Expiry      time.Time
 	DARTVersion int
 	FQDN        string // 新增字段：完全限定域名
+	Delegated   bool
 }
 
 func Uint32ToIP(ipUint uint32) net.IP {
@@ -111,6 +112,7 @@ func NewDHCPServer(dlIfce DownLinkInterface) *DHCPServer {
 			Expiry:      time.Now().Add(24 * time.Hour), // 静态租约默认24小时
 			FQDN:        fqdn,
 			DARTVersion: binding.DARTVersion,
+			Delegated:   binding.DELEGATED,
 		}
 	}
 
