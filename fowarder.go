@@ -304,11 +304,17 @@ NextPacket:
 }
 
 func trimIpSuffix(s string) string {
-	if i := strings.Index(s, "["); i != -1 {
-		return s[:i]
+	parts := strings.Split(s, ".")
+	lastPart := &parts[len(parts)-1]
+	ip := make(net.IP, 4)
+	n, err := fmt.Sscanf(*lastPart, "[%d-%d-%d-%d]", &ip[0], &ip[1], &ip[2], &ip[3])
+	if err == nil && n == 4 {
+		*lastPart = ""
+		return strings.Join(parts, ".")
 	}
 	return s
 }
+
 func (fr *ForwardRoutine) processUplink_Nat_and_Forward() {
 	// 这里处理来自CONFIG.Uplink的报文
 	// 从这个接口进来的报文，只有DART封装的需要转发，其他的都透明通过
