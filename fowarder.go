@@ -144,7 +144,7 @@ func (fr *ForwardRoutine) processDownlink_DartForward() {
 	}
 }
 
-func (fr *ForwardRoutine) handleExceededMTU(packetLen int, ipOfLongPkt *layers.IPv4) error {
+func (fr *ForwardRoutine) handleExceededMTU(suggestedMTU int, ipOfLongPkt *layers.IPv4) error {
 	ip := &layers.IPv4{
 		Version:  4,
 		TTL:      64,
@@ -153,11 +153,11 @@ func (fr *ForwardRoutine) handleExceededMTU(packetLen int, ipOfLongPkt *layers.I
 		SrcIP:    ipOfLongPkt.DstIP,
 		DstIP:    ipOfLongPkt.SrcIP,
 	}
-	suggestMTU := MTU - (packetLen - MTU)
+
 	icmp := &layers.ICMPv4{
 		TypeCode: layers.ICMPv4TypeDestinationUnreachable<<8 | layers.ICMPv4CodeFragmentationNeeded,
 		Id:       0,
-		Seq:      uint16(suggestMTU),
+		Seq:      uint16(suggestedMTU),
 	}
 
 	icmp_payload := gopacket.Payload(ipOfLongPkt.Contents[:28])
@@ -177,7 +177,7 @@ func (fr *ForwardRoutine) handleExceededMTU(packetLen int, ipOfLongPkt *layers.I
 		return err
 	}
 
-	log.Printf("[Downlink NAT-4-DART] ICMP 'packet too long' replied to sender. Suggested MTU: %d", suggestMTU)
+	log.Printf("[Downlink NAT-4-DART] ICMP 'packet too long' replied to sender. Suggested MTU: %d", suggestedMTU)
 	return nil
 }
 func (fr *ForwardRoutine) processDownlink_Nat_4_Dart() {
@@ -281,7 +281,8 @@ NextPacket:
 			packetLen := len(buffer.Bytes())
 
 			if packetLen > MTU {
-				err := fr.handleExceededMTU(packetLen, ip)
+				suggestedMTU := MTU - int(dart.HeaderLen()+8) // UDP头长度为8字节
+				err := fr.handleExceededMTU(suggestedMTU, ip)
 				if err != nil {
 					log.Printf("[Downlink NAT-4-DART] Failed to handle exceeded MTU: %v", err)
 				}
