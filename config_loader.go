@@ -39,6 +39,12 @@ type LinkInterface struct {
 	Owner interface{}
 }
 
+type cachedDnsItem struct {
+	IP       net.IP
+	Support  bool
+	LiveTime time.Time
+}
+
 type UpLinkInterface struct {
 	LinkInterface
 	Name             string   `yaml:"name"`
@@ -47,6 +53,7 @@ type UpLinkInterface struct {
 	_publicIP        net.IP
 	ipNet            net.IPNet
 	inRootDomain     bool
+	domainCache      map[string]cachedDnsItem
 }
 
 type DownLinkInterface struct {
@@ -110,6 +117,14 @@ func (u *UpLinkInterface) resolveA(fqdn string) (ip net.IP, supportDart bool) {
 		// 如果解析失败，说明fqdn中没有嵌入IP。那就进入正常的DNS解析流程
 	}
 
+	// 在这里设置一个DNS CACHE。先从CACHE中查询，如果命中，直接返回
+	cachedDns, ok := u.domainCache[fqdn]
+	if ok {
+		if time.Now().Before(cachedDns.LiveTime) {
+			return cachedDns.IP, cachedDns.Support
+		}
+	}
+
 	for _, dnsServer := range u.DNSServers {
 		IPAddresses, supportDart, err := resolveARecord(fqdn, dnsServer, 0)
 		if err != nil {
@@ -119,6 +134,7 @@ func (u *UpLinkInterface) resolveA(fqdn string) (ip net.IP, supportDart bool) {
 			// log.Printf("No A records found for %s\n", fqdn)
 			return nil, false
 		} else {
+			u.domainCache[fqdn] = cachedDnsItem{IP: IPAddresses[0], Support: supportDart, LiveTime: time.Now().Add(time.Hour * 24)}
 			return IPAddresses[0], supportDart
 		}
 	}
@@ -220,6 +236,7 @@ func LoadConfig() (*Config, error) {
 
 	// Verify configurations of uplink interface
 	cfg.Uplink.LinkInterface.Owner = &cfg.Uplink
+	cfg.Uplink.domainCache = make(map[string]cachedDnsItem)
 
 	ipNets, err := findIpNetsOfIfce(cfg.Uplink.Name)
 	if err != nil {

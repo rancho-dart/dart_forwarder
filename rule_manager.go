@@ -41,10 +41,10 @@ func (rm *RuleManager) AddRule(table, chain string, rule []string) error {
 		if err := rm.ipt.Append(table, chain, rule...); err != nil {
 			return fmt.Errorf("append rule: %v", err)
 		}
-		log.Printf("Rule added: %s %s %v", table, chain, rule)
+		log.Printf("  Rule added: %s %s %v", table, chain, rule)
 		rm.rules = append(rm.rules, IptablesRule{table, chain, rule})
 	} else {
-		log.Printf("Rule already exists: %s %s %v", table, chain, rule)
+		log.Printf("  Rule already exists: %s %s %v", table, chain, rule)
 	}
 	return nil
 }
@@ -55,7 +55,7 @@ func (rm *RuleManager) Cleanup() {
 		if err := rm.ipt.Delete(r.Table, r.Chain, r.Rule...); err != nil {
 			log.Printf("Failed to delete rule: %s %s %v, error: %v", r.Table, r.Chain, r.Rule, err)
 		} else {
-			log.Printf("Deleted rule: %s %s %v", r.Table, r.Chain, r.Rule)
+			log.Printf("  Deleted rule: %s %s %v", r.Table, r.Chain, r.Rule)
 		}
 	}
 }
