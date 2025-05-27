@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/miekg/dns"
@@ -54,6 +55,7 @@ type UpLinkInterface struct {
 	ipNet            net.IPNet
 	inRootDomain     bool
 	domainCache      map[string]cachedDnsItem
+	cacheLock        sync.Mutex // 新增：用于保护 domainCache 的互斥锁
 }
 
 type DownLinkInterface struct {
@@ -118,12 +120,15 @@ func (u *UpLinkInterface) resolveA(fqdn string) (ip net.IP, supportDart bool) {
 	}
 
 	// 在这里设置一个DNS CACHE。先从CACHE中查询，如果命中，直接返回
+	u.cacheLock.Lock() // 新增：加锁
 	cachedDns, ok := u.domainCache[fqdn]
 	if ok {
 		if time.Now().Before(cachedDns.LiveTime) {
+			u.cacheLock.Unlock() // 新增：解锁
 			return cachedDns.IP, cachedDns.Support
 		}
 	}
+	u.cacheLock.Unlock() // 新增：解锁
 
 	for _, dnsServer := range u.DNSServers {
 		IPAddresses, supportDart, err := resolveARecord(fqdn, dnsServer, 0)
@@ -134,7 +139,9 @@ func (u *UpLinkInterface) resolveA(fqdn string) (ip net.IP, supportDart bool) {
 			// log.Printf("No A records found for %s\n", fqdn)
 			return nil, false
 		} else {
+			u.cacheLock.Lock() // 新增：加锁
 			u.domainCache[fqdn] = cachedDnsItem{IP: IPAddresses[0], Support: supportDart, LiveTime: time.Now().Add(time.Hour * 24)}
+			u.cacheLock.Unlock() // 新增：解锁
 			return IPAddresses[0], supportDart
 		}
 	}

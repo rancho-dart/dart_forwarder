@@ -21,6 +21,64 @@ type DNSServer struct {
 	ports []int
 }
 
+// 将 dns.Client 提升为全局变量，避免每次查询都创建新对象
+var dnsClient = &dns.Client{
+	Timeout: 3 * time.Second,
+}
+
+func resolveARecord(domain, dnsServer string, depth int) (addrs []net.IP, supportDart bool, err error) {
+	if depth > 10 {
+		return nil, false, fmt.Errorf("CNAME 链太长，疑似死循环")
+	}
+
+	// 每次递归调用创建独立的 dns.Client 实例  // ChatGPT说递归调用中反复使用同一个 dns.Client 实例是安全的，不会产生资源冲突
+	// c := &dns.Client{
+	//     Timeout: 3 * time.Second,
+	// }
+
+	m := new(dns.Msg)
+	m.SetQuestion(dns.Fqdn(domain), dns.TypeA)
+	m.RecursionDesired = true
+
+	// 使用独立的 dns.Client 进行查询
+	resp, _, err := dnsClient.Exchange(m, dnsServer+":53")
+	if err != nil {
+		return nil, false, err
+	}
+
+	var suppDart bool = false
+	var aRecords []net.IP
+	var lastCname string
+	var cnameChain = make(map[string]struct{}, 10)
+	cnameChain[domain] = struct{}{}
+
+	for _, ans := range resp.Answer {
+		rrName := ans.Header().Name
+		if strings.HasPrefix(rrName, DART_HOST_PREFIX) || strings.HasPrefix(rrName, DART_GATEWAY_PREFIX) {
+			suppDart = true
+		}
+
+		switch rr := ans.(type) {
+		case *dns.A:
+			aRecords = append(aRecords, rr.A)
+		case *dns.CNAME:
+			_, exists := cnameChain[rrName]
+			if !exists {
+				continue
+			}
+			lastCname = rr.Target
+			cnameChain[lastCname] = struct{}{}
+		}
+	}
+
+	if len(aRecords) > 0 {
+		return aRecords, suppDart, nil
+	} else if lastCname != "" {
+		return resolveARecord(lastCname, dnsServer, depth+1)
+	}
+	return nil, false, nil
+}
+
 func resolveNsRecord(domain, dnsServer string) (addrs []net.IP, err error) {
 	c := new(dns.Client)
 	c.Timeout = 3 * time.Second
@@ -62,58 +120,6 @@ func resolveNsRecord(domain, dnsServer string) (addrs []net.IP, err error) {
 	}
 
 	return addrs, nil
-}
-
-// resolveARecord 递归解析 CNAME 链，直到得到最终的 A 记录
-func resolveARecord(domain, dnsServer string, depth int) (addrs []net.IP, supportDart bool, err error) {
-	if depth > 10 {
-		return nil, false, fmt.Errorf("CNAME 链太长，疑似死循环")
-	}
-
-	c := new(dns.Client)
-	c.Timeout = 3 * time.Second
-
-	m := new(dns.Msg)
-	m.SetQuestion(dns.Fqdn(domain), dns.TypeA)
-	m.RecursionDesired = true
-
-	resp, _, err := c.Exchange(m, dnsServer+":53")
-	if err != nil {
-		return nil, false, err
-	}
-
-	var suppDart bool = false
-	var aRecords []net.IP
-	var lastCname string
-	var cnameChain = make(map[string]struct{}, 10)
-	cnameChain[domain] = struct{}{}
-
-	for _, ans := range resp.Answer {
-		// 如果cnameChain中不包含当前ans中的名称，则添加到cnameChain中
-		rrName := ans.Header().Name
-		if strings.HasPrefix(rrName, DART_HOST_PREFIX) || strings.HasPrefix(rrName, DART_GATEWAY_PREFIX) {
-			suppDart = true
-		}
-
-		switch rr := ans.(type) {
-		case *dns.A:
-			aRecords = append(aRecords, rr.A)
-		case *dns.CNAME:
-			_, exists := cnameChain[rrName]
-			if !exists {
-				continue
-			}
-			lastCname = rr.Target
-			cnameChain[lastCname] = struct{}{} // Follow cname chain. if name in the chain, append cname to the chain
-		}
-	}
-
-	if len(aRecords) > 0 {
-		return aRecords, suppDart, nil
-	} else if lastCname != "" {
-		return resolveARecord(lastCname, dnsServer, depth+1)
-	}
-	return nil, false, nil
 }
 
 func findSubDomainUnder(domain, base string) (string, bool) {
