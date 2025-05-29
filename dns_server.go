@@ -521,32 +521,45 @@ func (s *DNSServer) getOutboundInfo(domain string) *LinkInterface {
 	}
 }
 
-func (s *DNSServer) respondWithIP(w dns.ResponseWriter, r *dns.Msg, domain string, ip net.IP) {
-	m := new(dns.Msg)
-	m.SetReply(r)
-	m.Answer = append(m.Answer, &dns.A{
-		Hdr: dns.RR_Header{
-			Name:   domain,
-			Rrtype: dns.TypeA,
-			Class:  dns.ClassINET,
-			Ttl:    60,
-		},
-		A: ip,
-	})
-	w.WriteMsg(m)
-}
-
 func (s *DNSServer) respondWithPseudoIp(w dns.ResponseWriter, r *dns.Msg, domain string, ip net.IP) {
 	// 只有内网不支持DART协议的主机查询外网域名的时候才需要以伪地址响应
 
 	// 在返回伪地址之前，我们先查询到真实地址。这样，客户机发送报文到对方的时候，马上就能从伪地址映射表中拿到真实地址
-	pseudoIp := PSEUDO_POOL.FindOrAllocate(domain, ip, DARTPort) // 我们主动发起连接的时候，目标主机必须在默认的DARTPort收取UDP报文
+	pseudoIp := PSEUDO_POOL.FindOrAllocate(domain, ip, DARTPort).To4() // 我们主动发起连接的时候，目标主机必须在默认的DARTPort收取UDP报文
 
 	if pseudoIp == nil {
 		s.respondWithServerFailure(w, r)
 		return
 	}
-	s.respondWithIP(w, r, domain, pseudoIp)
+
+	m := new(dns.Msg)
+	m.SetReply(r)
+
+	AName := fmt.Sprintf("%d.%d.%d.%d.in-addr.arpa.", ip[3], ip[2], ip[1], ip[0])
+	m.Answer = append(m.Answer, &dns.CNAME{
+		Hdr: dns.RR_Header{
+			Name:   domain,
+			Rrtype: dns.TypeCNAME,
+			Class:  dns.ClassINET,
+			Ttl:    60,
+		},
+		Target: AName,
+	})
+
+	m.Answer = append(m.Answer, &dns.A{
+		Hdr: dns.RR_Header{
+			Name:   AName,
+			Rrtype: dns.TypeA,
+			Class:  dns.ClassINET,
+			Ttl:    60,
+		},
+		A: pseudoIp,
+	})
+
+	err := w.WriteMsg(m)
+	if err != nil {
+		log.Println("failed to write response:", err)
+	}
 }
 
 func (s *DNSServer) respondWithDartGateway(w dns.ResponseWriter, r *dns.Msg, domain string, gwdomain string, gwIP net.IP, withCName bool) {
