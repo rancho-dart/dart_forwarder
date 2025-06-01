@@ -181,7 +181,7 @@ func (s *DNSServer) Start() {
 func (s *DNSServer) startServer(port int) {
 	server := &dns.Server{Addr: fmt.Sprintf(":%d", port), Net: "udp"}
 	server.Handler = s
-	log.Printf("DNS Server started on port %d\n", port)
+	logIf("info", "DNS Server started on port %d\n", port)
 	if err := server.ListenAndServe(); err != nil {
 		log.Fatalf("Failed to start DNS server:[%v]\n", err)
 	}
@@ -374,7 +374,7 @@ func (s *DNSServer) respondWithPtr(w dns.ResponseWriter, r *dns.Msg, queriedReve
 		Ptr: dns.Fqdn(hostname), // e.g. "example.com."
 	})
 	w.WriteMsg(m)
-	log.Printf("respondWithPtr: %s -> %s", queriedReverseName, hostname)
+	logIf("debug1", "respondWithPtr: %s -> %s", queriedReverseName, hostname)
 }
 
 func (s *DNSServer) respondWithCName(w dns.ResponseWriter, r *dns.Msg, queriedDomain string, domain string) {
@@ -412,7 +412,7 @@ func (s *DNSServer) respondWithForwardQuery(w dns.ResponseWriter, r *dns.Msg, DN
 		}
 	}
 
-	log.Printf("Forward failed")
+	logIf("error", "Forward failed")
 	s.respondWithServerFailure(w, r)
 }
 
@@ -558,7 +558,7 @@ func (s *DNSServer) respondWithPseudoIp(w dns.ResponseWriter, r *dns.Msg, domain
 
 	err := w.WriteMsg(m)
 	if err != nil {
-		log.Println("failed to write response:", err)
+		logIf("error", "failed to write response:", err)
 	}
 }
 

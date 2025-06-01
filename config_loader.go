@@ -91,16 +91,16 @@ func (u *UpLinkInterface) lookupNS(domain string) (addrs []net.IP) {
 	for _, dnsServer := range u.DNSServers {
 		nameServers, err := resolveNsRecord(domain, dnsServer)
 		if err != nil {
-			// log.Printf("Error resolving NS record for %s: %v, try next dns server...\n", domain, err)
+			// logIf("error", "Error resolving NS record for %s: %v, try next dns server...\n", domain, err)
 			continue
 		} else if len(nameServers) == 0 {
-			log.Printf("No NS records found for %s, try next dns server...\n", domain)
+			logIf("error", "No NS records found for %s, try next dns server...\n", domain)
 			return nil
 		} else {
 			return nameServers
 		}
 	}
-	// log.Printf("No NS records found for [%s]", domain)
+	// logIf("error", "No NS records found for [%s]", domain)
 	return nil
 }
 
@@ -133,10 +133,10 @@ func (u *UpLinkInterface) resolveA(fqdn string) (ip net.IP, supportDart bool) {
 	for _, dnsServer := range u.DNSServers {
 		IPAddresses, supportDart, err := resolveARecord(fqdn, dnsServer, 0)
 		if err != nil {
-			log.Printf("Error resolving A record for %s: %v, try next dns server...\n", fqdn, err)
+			logIf("error", "Error resolving A record for %s: %v, try next dns server...\n", fqdn, err)
 			continue
 		} else if len(IPAddresses) == 0 {
-			// log.Printf("No A records found for %s\n", fqdn)
+			// logIf("error", "No A records found for %s\n", fqdn)
 			return nil, false
 		} else {
 			u.cacheLock.Lock() // 新增：加锁
@@ -229,85 +229,84 @@ func findIpNetsOfIfce(ifName string) ([]net.IPNet, error) {
 	return filteredIpNet, nil
 }
 
-// LoadConfig 加载配置文件并返回配置信息。
-func LoadConfig() (*Config, error) {
+// LoadCONFIG 加载配置文件并返回配置信息。
+func LoadCONFIG() error {
 	configFile, err := os.ReadFile(ConfigFile)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read config file: %v", err)
+		return fmt.Errorf("failed to read config file: %v", err)
 	}
 
-	var cfg Config
-	if err := yaml.Unmarshal(configFile, &cfg); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal config: %v", err)
+	if err := yaml.Unmarshal(configFile, &CONFIG); err != nil {
+		return fmt.Errorf("failed to unmarshal config: %v", err)
 	}
 
 	// Verify configurations of uplink interface
-	cfg.Uplink.LinkInterface.Owner = &cfg.Uplink
-	cfg.Uplink.domainCache = make(map[string]cachedDnsItem)
+	CONFIG.Uplink.LinkInterface.Owner = &CONFIG.Uplink
+	CONFIG.Uplink.domainCache = make(map[string]cachedDnsItem)
 
-	ipNets, err := findIpNetsOfIfce(cfg.Uplink.Name)
+	ipNets, err := findIpNetsOfIfce(CONFIG.Uplink.Name)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get addresses for interface %s: %v", cfg.Uplink.Name, err)
+		return fmt.Errorf("failed to get addresses for interface %s: %v", CONFIG.Uplink.Name, err)
 	}
-	cfg.Uplink.ipNet = ipNets[0]
+	CONFIG.Uplink.ipNet = ipNets[0]
 
-	if len(cfg.Uplink.DNSServers) == 0 {
-		return nil, fmt.Errorf("Uplink.DNSServers cannot be empty")
+	if len(CONFIG.Uplink.DNSServers) == 0 {
+		return fmt.Errorf("Uplink.DNSServers cannot be empty")
 	}
 
 	// Verify configurations of Downlinks interfaces
-	log.Printf("Locating device position: am I delegated to any domain? .. ")
-	for i := range cfg.Downlinks {
-		dl := &cfg.Downlinks[i]
+	logIf("info", "Locating device position: am I delegated to any domain? .. ")
+	for i := range CONFIG.Downlinks {
+		dl := &CONFIG.Downlinks[i]
 		dl.LinkInterface.Owner = dl
 
 		// 将接口域名统一为小写
 		dl.Domain = dns.Fqdn(strings.ToLower(dl.Domain))
 
-		nameServers := cfg.Uplink.lookupNS(dl.Domain)
+		nameServers := CONFIG.Uplink.lookupNS(dl.Domain)
 
 		// 我们先看一下返回的名字服务器中有没有上联口地址
 		for _, ns := range nameServers {
-			if ns.Equal(cfg.Uplink.ipNet.IP) {
+			if ns.Equal(CONFIG.Uplink.ipNet.IP) {
 				// 本地的域名已经成功在父域DNS服务器上解析
 				dl.RegistedInUplinkDNS = true
-				log.Printf("PASS: domain [%s] on interface [%s] has been delegated to [%s] by dns server(s) on uplink interface",
-					dl.Domain, dl.Name, cfg.Uplink.ipNet.IP)
+				logIf("info", "PASS: domain [%s] on interface [%s] has been delegated to [%s] by dns server(s) on uplink interface",
+					dl.Domain, dl.Name, CONFIG.Uplink.ipNet.IP)
 				break
 			}
 		}
 
 		// 如果没有，那么我们再看一下名字服务器中有没有上联口的公网地址
-		if !dl.RegistedInUplinkDNS && isPrivateAddr(cfg.Uplink.Addr()) {
+		if !dl.RegistedInUplinkDNS && isPrivateAddr(CONFIG.Uplink.Addr()) {
 			for _, ns := range nameServers {
-				if ns.Equal(cfg.Uplink.PublicIP()) {
+				if ns.Equal(CONFIG.Uplink.PublicIP()) {
 					// 本地的域名已经成功在父域DNS服务器上解析
 					dl.RegistedInUplinkDNS = true
-					log.Printf("PASS: domain [%s] configured on interface [%s] has been delegated to [%s]",
-						dl.Domain, dl.Name, cfg.Uplink.PublicIP())
-					log.Printf("Caution: you should map udp port %s:%d => %s:%d & %s:%d => %s:%d on NAT gateway",
-						cfg.Uplink.PublicIP(), DNSPort, &cfg.Uplink.ipNet, DNSPort, cfg.Uplink.PublicIP(), DARTPort, &cfg.Uplink.ipNet, DARTPort)
+					logIf("info", "PASS: domain [%s] configured on interface [%s] has been delegated to [%s]",
+						dl.Domain, dl.Name, CONFIG.Uplink.PublicIP())
+					logIf("info", "Caution: you should map udp port %s:%d => %s:%d & %s:%d => %s:%d on NAT gateway",
+						CONFIG.Uplink.PublicIP(), DNSPort, &CONFIG.Uplink.ipNet, DNSPort, CONFIG.Uplink.PublicIP(), DARTPort, &CONFIG.Uplink.ipNet, DARTPort)
 					break
 				}
 			}
 		}
 
-		DartDomain := cfg.Uplink.probeLocation(dl.Domain)
+		DartDomain := CONFIG.Uplink.probeLocation(dl.Domain)
 
 		if DartDomain == "" {
-			log.Printf("The uplink interface of this device is connected to root domain of Internet IPv4.")
-			cfg.Uplink.inRootDomain = true
+			logIf("info", "The uplink interface of this device is connected to root domain of Internet IPv4.")
+			CONFIG.Uplink.inRootDomain = true
 
 			if !dl.RegistedInUplinkDNS {
-				publicIP := cfg.Uplink.PublicIP()
+				publicIP := CONFIG.Uplink.PublicIP()
 				if publicIP != nil {
-					log.Printf("Warning: domain [%s] configured on interface [%s] isn't delegated by dns server(s) on uplink interface. Will use public IP [%s] as DART source address", dl.Domain, dl.Name, publicIP)
+					logIf("warn", "Warning: domain [%s] configured on interface [%s] isn't delegated by dns server(s) on uplink interface. Will use public IP [%s] as DART source address", dl.Domain, dl.Name, publicIP)
 				} else {
 					log.Fatalf("Domain [%s] configured on interface [%s] isn't delegated by dns server(s) on uplink interface, and the public IP of uplink interface is not available. Please check your configuration.", dl.Domain, dl.Name)
 				}
 			}
 		} else {
-			log.Printf("The uplink interface of this device is connected to DART domain: [%s]", DartDomain)
+			logIf("info", "The uplink interface of this device is connected to DART domain: [%s]", DartDomain)
 
 			if !dl.RegistedInUplinkDNS {
 				log.Fatalf("Sub-DART-domain not allowed in undelegated DART domain. Exit.")
@@ -316,20 +315,20 @@ func LoadConfig() (*Config, error) {
 
 		ipNets, err := findIpNetsOfIfce(dl.Name)
 		if err != nil {
-			return nil, err
+			return err
 		}
 
 		// 解析 address_pool
 		if dl.AddressPool != "" {
 			parts := strings.Split(dl.AddressPool, "-")
 			if len(parts) != 2 {
-				return nil, fmt.Errorf("invalid address_pool format: %s", dl.AddressPool)
+				return fmt.Errorf("invalid address_pool format: %s", dl.AddressPool)
 			}
 
 			headIP := net.ParseIP(parts[0]).To4()
 			tailIP := net.ParseIP(parts[1]).To4()
 			if headIP == nil || tailIP == nil {
-				return nil, fmt.Errorf("invalid IP address in address_pool: %s", dl.AddressPool)
+				return fmt.Errorf("invalid IP address in address_pool: %s", dl.AddressPool)
 			}
 
 			dl.PoolHeadIP = headIP
@@ -359,16 +358,16 @@ func LoadConfig() (*Config, error) {
 		for _, binding := range dl.StaticBindings {
 			_, err := net.ParseMAC(binding.MAC)
 			if err != nil {
-				return nil, fmt.Errorf("invalid MAC address in static_bindings: %s", binding.MAC)
+				return fmt.Errorf("invalid MAC address in static_bindings: %s", binding.MAC)
 			}
 			ipAddr := net.ParseIP(binding.IP).To4()
 			if ipAddr == nil {
-				return nil, fmt.Errorf("invalid IP address in static_bindings: %s", binding.IP)
+				return fmt.Errorf("invalid IP address in static_bindings: %s", binding.IP)
 			}
 		}
 	}
 
-	return &cfg, nil
+	return nil
 }
 
 func probePublicIP(websites []string, dnsServer string) (net.IP, error) {
@@ -399,7 +398,7 @@ func probePublicIP(websites []string, dnsServer string) (net.IP, error) {
 	for _, website := range websites {
 		req, err := http.NewRequest("GET", website, nil)
 		if err != nil {
-			log.Println("failed to create request:", err)
+			logIf("error", "failed to create request:", err)
 			continue
 		}
 
@@ -409,14 +408,14 @@ func probePublicIP(websites []string, dnsServer string) (net.IP, error) {
 
 		resp, err := client.Do(req)
 		if err != nil {
-			log.Println("request failed:", err)
+			logIf("error", "request failed:", err)
 			continue
 		}
 		defer resp.Body.Close()
 
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
-			log.Println("failed to read response:", err)
+			logIf("error", "failed to read response:", err)
 			continue
 		}
 
@@ -424,7 +423,7 @@ func probePublicIP(websites []string, dnsServer string) (net.IP, error) {
 		if ip := net.ParseIP(ipStr); ip != nil {
 			return ip.To4(), nil
 		} else {
-			log.Printf("invalid IP string from %s: %q", website, ipStr)
+			logIf("error", "invalid IP string from %s: %q", website, ipStr)
 		}
 	}
 

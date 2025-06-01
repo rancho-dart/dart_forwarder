@@ -67,7 +67,7 @@ func startDHCPServerModule() {
 			DHCP_SERVERS[iface.Name] = server
 
 			go func(pc net.PacketConn, server *DHCPServer) {
-				log.Printf("DHCP server started on %s...\n", server.dlIfce.Name)
+				logIf("info", "DHCP server started on %s...\n", server.dlIfce.Name)
 				log.Fatal(dhcp4.Serve(pc, server))
 			}(pc, server)
 		}
@@ -122,7 +122,7 @@ func NewDHCPServer(dlIfce DownLinkInterface) *DHCPServer {
 	if dlIfce.AddressPool != "" {
 		rows, err := DB.Query("SELECT mac_address, ip_address, fqdn, dart_version, Expiry FROM dhcp_leases")
 		if err != nil {
-			log.Printf("Error reading from SQLite database: %v\n", err)
+			log.Fatalf("Error reading from SQLite database: %v\n", err)
 		}
 		defer rows.Close()
 
@@ -131,12 +131,12 @@ func NewDHCPServer(dlIfce DownLinkInterface) *DHCPServer {
 			var dartVersion int
 			err := rows.Scan(&mac, &ip, &fqdn, &dartVersion, &expiryStr)
 			if err != nil {
-				log.Printf("Error scanning row: %v\n", err)
+				logIf("error", "Error scanning row: %v\n", err)
 				continue
 			}
 			expiry, err := time.Parse(time.RFC3339, expiryStr)
 			if err != nil {
-				log.Printf("Error parsing expiry time: %v\n", err)
+				logIf("error", "Error parsing expiry time: %v\n", err)
 				continue
 			}
 			leasesByIp[ip] = leaseInfo{
@@ -316,11 +316,11 @@ func (s *DHCPServer) ServeDHCP(p dhcp4.Packet, msgType dhcp4.MessageType, option
 					}
 
 					// write to db
-					log.Printf("Write to db: mac=%s, ip=%s, dart_version=%d, fqdn=%s, Expiry=%s\n", mac, reqIP.String(), dartVersion, fqdn, time.Now().Add(s.leaseDuration).Format(time.RFC3339))
+					logIf("debug1", "Write to db: mac=%s, ip=%s, dart_version=%d, fqdn=%s, Expiry=%s\n", mac, reqIP.String(), dartVersion, fqdn, time.Now().Add(s.leaseDuration).Format(time.RFC3339))
 					_, err := DB.Exec("INSERT OR REPLACE INTO dhcp_leases (mac_address, ip_address, dart_version, fqdn, Expiry) VALUES (?, ?, ?, ?, ?)",
 						mac, reqIP.String(), dartVersion, fqdn, time.Now().Add(s.leaseDuration).Format(time.RFC3339))
 					if err != nil {
-						log.Printf("Error writing to SQLite database: %v\n", err)
+						logIf("error", "Error writing to SQLite database: %v\n", err)
 					}
 					return dhcp4.ReplyPacket(p, dhcp4.ACK, s.dlIfce.ipNet.IP, reqIP, s.leaseDuration,
 						s.options.SelectOrderOrAll(options[dhcp4.OptionParameterRequestList]))
@@ -344,10 +344,10 @@ func (s *DHCPServer) ServeDHCP(p dhcp4.Packet, msgType dhcp4.MessageType, option
 			}
 		}
 
-		log.Printf("Delete from db: mac=%s, ip=%s", mac, p.CIAddr())
+		logIf("info", "Delete from db: mac=%s, ip=%s", mac, p.CIAddr())
 		_, err := DB.Exec("DELETE FROM dhcp_leases WHERE mac_address = ?", mac)
 		if err != nil {
-			log.Printf("Failed to delete lease: %v", err)
+			logIf("error", "Failed to delete lease: %v", err)
 		}
 	}
 	return nil

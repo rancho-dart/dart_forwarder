@@ -105,7 +105,7 @@ func (p *PseudoIpPool) FindOrAllocate(domain string, realIP net.IP, udpport uint
 				p.mutex.Unlock()
 				// 新增：同步数据库
 				if err := p.assignPseudoAddress(domain, pseudoIP.String(), realIP.String(), entry.udpPort); err != nil {
-					log.Printf("Failed to assign pseudo address for %s: %v", domain, err)
+					logIf("error", "Failed to assign pseudo address for %s: %v", domain, err)
 				}
 				p.mutex.Lock()
 				return pseudoIP
@@ -147,7 +147,7 @@ func (p *PseudoIpPool) CleanupExpired() {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
-	log.Printf("Cleaning up expired pseudo addresses...")
+	logIf("info", "Cleaning up expired pseudo addresses...")
 	now := time.Now()
 	for ipInt, entry := range p.ipMap {
 		if now.Sub(entry.LastUsedAt) > p.ttl {
@@ -156,7 +156,7 @@ func (p *PseudoIpPool) CleanupExpired() {
 			delete(p.domainMap, domain)
 			// 新增：同步数据库
 			if err := p.releasePseudoAddress(domain); err != nil {
-				log.Printf("Failed to release pseudo address for %s: %v", domain, err)
+				logIf("error", "Failed to release pseudo address for %s: %v", domain, err)
 			}
 		}
 	}
@@ -190,7 +190,7 @@ func (p *PseudoIpPool) releasePseudoAddress(domain string) error {
 func (p *PseudoIpPool) loadPseudoAddresses() {
 	rows, err := DB.Query("SELECT Domain, PseudoIP, RealIP, udpPort, LastUsedAt FROM pseudo_addresses")
 	if err != nil {
-		log.Printf("Error loading pseudo addresses: %v\n", err)
+		logIf("error", "Error loading pseudo addresses: %v\n", err)
 		return
 	}
 	defer rows.Close()
@@ -201,26 +201,26 @@ func (p *PseudoIpPool) loadPseudoAddresses() {
 	for rows.Next() {
 		var domain, pseudoIPStr, realIPStr, udpPortStr, lastUsedAt string
 		if err := rows.Scan(&domain, &pseudoIPStr, &realIPStr, &udpPortStr, &lastUsedAt); err != nil {
-			log.Printf("Error scanning pseudo address row: %v\n", err)
+			logIf("error", "Error scanning pseudo address row: %v\n", err)
 			continue
 		}
 
 		pseudoIP := net.ParseIP(pseudoIPStr)
 		if pseudoIP == nil {
-			log.Printf("Invalid pseudo IP address: %s", pseudoIPStr)
+			logIf("error", "Invalid pseudo IP address: %s", pseudoIPStr)
 			continue
 		}
 
 		ipInt := ipToUint32(pseudoIP.To4())
 		if p.head > ipInt || ipInt > p.tail {
-			// log.Printf("Pseudo IP %s not in pool", pseudoIPStr)
+			// logIf("info", "Pseudo IP %s not in pool", pseudoIPStr)
 			continue
 		}
 
 		// 解析realIP
 		realIP := net.ParseIP(realIPStr)
 		if realIP == nil && realIPStr != "" {
-			log.Printf("Invalid real IP address: %s", realIPStr)
+			logIf("error", "Invalid real IP address: %s", realIPStr)
 			continue
 		}
 
@@ -229,7 +229,7 @@ func (p *PseudoIpPool) loadPseudoAddresses() {
 		if udpPortStr != "" {
 			port64, err := strconv.ParseUint(udpPortStr, 10, 16)
 			if err != nil {
-				log.Printf("Invalid udpPort value: %s", udpPortStr)
+				logIf("error", "Invalid udpPort value: %s", udpPortStr)
 				continue
 			}
 			port = uint16(port64)
@@ -238,7 +238,7 @@ func (p *PseudoIpPool) loadPseudoAddresses() {
 		// 解析时间
 		usedAt, err := time.Parse(time.RFC3339, lastUsedAt)
 		if err != nil {
-			log.Printf("Invalid timestamp format: %s", lastUsedAt)
+			logIf("error", "Invalid timestamp format: %s", lastUsedAt)
 			usedAt = time.Now() // 默认使用当前时间
 		}
 
