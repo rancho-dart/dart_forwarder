@@ -58,18 +58,21 @@ var DHCP_SERVERS map[string]*DHCPServer = make(map[string]*DHCPServer)
 func startDHCPServerModule() {
 	// 遍历globalConfig中的下行接口，启动DHCP服务
 	for _, iface := range CONFIG.Downlinks {
-		if iface.AddressPool != "" {
-			server := NewDHCPServer(iface)
+		server := NewDHCPServer(iface) // 就算接口上没有配置DHCP地址池，仍然要创建这个对象，因为可能存在静态绑定的主机地址别人要来查询。
+		DHCP_SERVERS[iface.Name] = server
+
+		if server.headIP != nil && server.tailIP != nil { // 只有接口上配置了有效地址池的时候才需要真正启动DHCP SERVER
 			pc, err := conn.NewUDP4BoundListener(iface.Name, ":67")
 			if err != nil {
 				log.Fatalf("Error creating UDP listener for %s: %v", iface.Name, err)
 			}
-			DHCP_SERVERS[iface.Name] = server
 
 			go func(pc net.PacketConn, server *DHCPServer) {
 				logIf("info", "DHCP server started on %s...\n", server.dlIfce.Name)
 				log.Fatal(dhcp4.Serve(pc, server))
 			}(pc, server)
+		} else {
+			logIf("warn", "No valid address pool configured for %s, DHCP server isn't started on it.", iface.Name)
 		}
 	}
 
@@ -79,14 +82,12 @@ func startDHCPServerModule() {
 
 func NewDHCPServer(dlIfce DownLinkInterface) *DHCPServer {
 	// 解析地址池
+	var headIP net.IP
+	var tailIP net.IP
 	poolParts := strings.Split(dlIfce.AddressPool, "-")
-	if len(poolParts) != 2 {
-		log.Fatalf("Invalid address pool format for %s: %s", dlIfce.Name, dlIfce.AddressPool)
-	}
-	startIP := net.ParseIP(poolParts[0]).To4()
-	endIP := net.ParseIP(poolParts[1]).To4()
-	if startIP == nil || endIP == nil {
-		log.Fatalf("Invalid IP address in pool for %s", dlIfce.Name)
+	if len(poolParts) == 2 {
+		headIP = net.ParseIP(poolParts[0]).To4()
+		tailIP = net.ParseIP(poolParts[1]).To4()
 	}
 
 	// 准备DHCP选项
@@ -159,8 +160,8 @@ func NewDHCPServer(dlIfce DownLinkInterface) *DHCPServer {
 	return &DHCPServer{
 		dlIfce:        dlIfce,
 		options:       options,
-		headIP:        startIP,
-		tailIP:        endIP,
+		headIP:        headIP,
+		tailIP:        tailIP,
 		leaseDuration: 24 * time.Hour, // 默认租约24小时
 		leasesByIp:    leasesByIp,
 		leasesByFQDN:  leasesByFQDN,
@@ -364,10 +365,10 @@ func (s *DHCPServer) findFreeIP(mac string) net.IP {
 	}
 
 	// 从地址池中查找可用IP
-	start := IPToUint32(s.headIP)
-	end := IPToUint32(s.tailIP)
+	head := IPToUint32(s.headIP)
+	tail := IPToUint32(s.tailIP)
 
-	for i := start; i <= end; i++ {
+	for i := head; i <= tail; i++ {
 		ip := Uint32ToIP(i)
 		if ip.Equal(net.IPv4zero) {
 			continue

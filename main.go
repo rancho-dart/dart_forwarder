@@ -26,7 +26,7 @@ var logIf = func(level string, format string, v ...interface{}) {
 	if *loglevel == "error" && level == "error" ||
 		*loglevel == "warn" && (level == "warn" || level == "error") ||
 		*loglevel == "info" && (level == "warn" || level == "error" || level == "info") ||
-		*loglevel == "debug1" && (level == "devug1" || level == "warn" || level == "error" || level == "info") || // 输出DNS/DHCP的报文级别的调试信息
+		*loglevel == "debug1" && (level == "debug1" || level == "warn" || level == "error" || level == "info") || // 输出DNS/DHCP的报文级别的调试信息
 		*loglevel == "debug2" { // 输出FORWARDER的报文级别的调试信息
 		log.Printf("["+level+"] "+format, v...)
 	}

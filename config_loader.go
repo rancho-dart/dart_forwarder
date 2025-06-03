@@ -352,6 +352,10 @@ func LoadCONFIG() error {
 				dl.PoolHeadIP = nil
 				dl.PoolTailIP = nil
 			}
+		} else { // 没有配置地址池
+			if len(ipNets) > 0 {
+				dl.ipNet = ipNets[0]
+			}
 		}
 
 		// 解析 StaticBindings

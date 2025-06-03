@@ -42,19 +42,16 @@ func (fr *ForwardRoutine) Run() {
 
 	switch fr.ifce.Owner.(type) {
 	case *UpLinkInterface:
-		logIf("info", "uplink input processing start")
+		logIf("info", "Uplink input processing started")
 		fr.processUplink_Nat_and_Forward()
-		logIf("info", "uplink forward processing end")
 	case *DownLinkInterface:
 		switch fr.style {
 		case Input:
-			logIf("info", "Downlink DART FORWARD processing start")
+			logIf("info", "Downlink DART FORWARD processing started")
 			fr.processDownlink_DartForward()
-			logIf("info", "Downlink DART FORWARD processing end")
 		case Forward:
-			logIf("info", "Downlink NAT-4-DART processing start")
+			logIf("info", "Downlink NAT-4-DART processing started")
 			fr.processDownlink_Nat_4_Dart()
-			logIf("info", "Downlink NAT-4-DART processing end")
 		}
 	}
 }
@@ -552,15 +549,20 @@ func startForwardModule() {
 	rm.AddRule("nat", "POSTROUTING", []string{"-p", "udp", "--dport", "55847", "-j", "RETURN"})
 
 	outIfce := CONFIG.Uplink.LinkInterface.Name()
-	for _, inLI := range CONFIG.Downlinks {
+	for _, DownLink := range CONFIG.Downlinks {
+		if DownLink.Name == CONFIG.Uplink.Name {
+			logIf("warn", "Router-on-a-stick is enabled on interface %s, so NAT44 is not enabled.", DownLink.Name)
+			continue
+		}
 		// 检查下联口的地址是否是私网地址
-		if isPrivateAddr(inLI.ipNet.IP) {
-			private_network := inLI.ipNet.String()
+		if isPrivateAddr(DownLink.ipNet.IP) {
+			private_network := DownLink.ipNet.String()
 			rm.AddRule("nat", "POSTROUTING", []string{"-o", outIfce, "-s", private_network, "-j", "MASQUERADE"})
 
 			// 默认ACCEPT的情况下，不加下面的两条规则，也能正常工作。加上这两条规则，不依赖默认配置
-			rm.AddRule("filter", "FORWARD", []string{"-i", inLI.Name, "-o", outIfce, "-s", private_network, "!", "-d", PSEUDO_IP_POOL, "-m", "conntrack", "--ctstate", "NEW,ESTABLISHED,RELATED", "-j", "ACCEPT"})
-			rm.AddRule("filter", "FORWARD", []string{"-o", inLI.Name, "-i", outIfce, "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"})
+			rm.AddRule("filter", "FORWARD", []string{"-i", DownLink.Name, "-o", outIfce, "-s", private_network, "!", "-d", PSEUDO_IP_POOL, "-m", "conntrack", "--ctstate", "NEW,ESTABLISHED,RELATED", "-j", "ACCEPT"})
+			rm.AddRule("filter", "FORWARD", []string{"-o", DownLink.Name, "-i", outIfce, "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"})
+			logIf("info", "Since interface %s has private address, NAT44 is enabled on it.", DownLink.Name)
 		}
 	}
 
@@ -573,15 +575,20 @@ func startForwardModule() {
 	}
 	queueNo++
 
-	for _, ifce := range CONFIG.Downlinks {
-		createAndStartQueue(queueNo, ifce.LinkInterface, Forward)
-		if err := rm.AddRule("filter", "FORWARD", []string{"-i", ifce.Name, "-j", "NFQUEUE", "--queue-num", strconv.Itoa(int(queueNo))}); err != nil {
+	for _, DownLink := range CONFIG.Downlinks {
+		createAndStartQueue(queueNo, DownLink.LinkInterface, Forward)
+		if err := rm.AddRule("filter", "FORWARD", []string{"-i", DownLink.Name, "-j", "NFQUEUE", "--queue-num", strconv.Itoa(int(queueNo))}); err != nil {
 			log.Fatalf("Failed to set iptables rule for Downlink NAT-4-DART: %v", err)
 		}
 		queueNo++
 
-		createAndStartQueue(queueNo, ifce.LinkInterface, Input)
-		if err := rm.AddRule("filter", "INPUT", []string{"-i", ifce.Name, "-p", "udp", "--dport", "55847", "-j", "NFQUEUE", "--queue-num", strconv.Itoa(int(queueNo))}); err != nil {
+		if DownLink.Name == CONFIG.Uplink.Name {
+			logIf("warn", "Router-on-a-stick is enabled on interface %s, so DART packets forwarding is disabled.", DownLink.Name)
+			continue
+		}
+
+		createAndStartQueue(queueNo, DownLink.LinkInterface, Input)
+		if err := rm.AddRule("filter", "INPUT", []string{"-i", DownLink.Name, "-p", "udp", "--dport", "55847", "-j", "NFQUEUE", "--queue-num", strconv.Itoa(int(queueNo))}); err != nil {
 			log.Fatalf("Failed to set iptables rule for Downlink DART FORWARD: %v", err)
 		}
 		queueNo++
