@@ -537,18 +537,12 @@ func createAndStartQueue(queueNo uint16, ifce LinkInterface, style QueueStyle) {
 	go forwardRouting.Run()
 }
 
-func startForwardModule() {
-
-	rm := NewRuleManager()
-	go rm.CleanupOnSignal()
-
-	logIf("info", "Creating queues & iptable rules to capture packets...")
-
+func EnableNAT44(rm *RuleManager) {
 	// Add NAT44 rules
 	rm.AddRule("nat", "POSTROUTING", []string{"-p", "udp", "--sport", "55847", "-j", "RETURN"})
 	rm.AddRule("nat", "POSTROUTING", []string{"-p", "udp", "--dport", "55847", "-j", "RETURN"})
 
-	outIfce := CONFIG.Uplink.LinkInterface.Name()
+	outIfce := CONFIG.Uplink.Name
 	for _, DownLink := range CONFIG.Downlinks {
 		if DownLink.Name == CONFIG.Uplink.Name {
 			logIf("warn", "Router-on-a-stick is enabled on interface %s, so NAT44 is not enabled.", DownLink.Name)
@@ -565,6 +559,16 @@ func startForwardModule() {
 			logIf("info", "Since interface %s has private address, NAT44 is enabled on it.", DownLink.Name)
 		}
 	}
+}
+
+func startForwardModule() {
+
+	rm := NewRuleManager()
+	go rm.CleanupOnSignal()
+
+	logIf("info", "Creating queues & iptable rules to capture packets...")
+
+	EnableNAT44(rm)
 
 	// Add NFQUEUE rules
 	var queueNo uint16 = 0
