@@ -61,7 +61,7 @@ func startDHCPServerModule() {
 		server := NewDHCPServer(iface) // 就算接口上没有配置DHCP地址池，仍然要创建这个对象，因为可能存在静态绑定的主机地址别人要来查询。
 		DHCP_SERVERS[iface.Name] = server
 
-		if server.headIP != nil && server.tailIP != nil { // 只有接口上配置了有效地址池的时候才需要真正启动DHCP SERVER
+		if (server.headIP != nil && server.tailIP != nil) || len(server.leasesByIp) > 0 { // 只有接口上配置了有效地址池或者存在静态绑定的时候才需要真正启动DHCP SERVER
 			pc, err := conn.NewUDP4BoundListener(iface.Name, ":67")
 			if err != nil {
 				log.Fatalf("Error creating UDP listener for %s: %v", iface.Name, err)
@@ -100,6 +100,9 @@ func NewDHCPServer(dlIfce DownLinkInterface) *DHCPServer {
 	// 添加DNS服务器
 	options[dhcp4.OptionDomainNameServer] = dlIfce.ipNet.IP
 
+	var leasesByIp = make(map[string]leaseInfo)
+	var leasesByFQDN = make(map[string]leaseInfo)
+
 	// 初始化静态租约
 	staticLeases := make(map[string]leaseInfo)
 	for _, binding := range dlIfce.StaticBindings {
@@ -107,7 +110,7 @@ func NewDHCPServer(dlIfce DownLinkInterface) *DHCPServer {
 		if binding.FQDN != "" {
 			fqdn = dns.Fqdn(binding.FQDN)
 		}
-		staticLeases[strings.ToLower(binding.MAC)] = leaseInfo{
+		lease := leaseInfo{
 			IP:          net.ParseIP(binding.IP).To4(),
 			MAC:         strings.ToLower(binding.MAC),
 			Expiry:      time.Now().Add(24 * time.Hour), // 静态租约默认24小时
@@ -115,11 +118,12 @@ func NewDHCPServer(dlIfce DownLinkInterface) *DHCPServer {
 			DARTVersion: binding.DARTVersion,
 			Delegated:   binding.DELEGATED,
 		}
+		staticLeases[strings.ToLower(binding.MAC)] = lease
+		leasesByIp[lease.IP.String()] = lease
+		leasesByFQDN[fqdn] = lease
 	}
 
 	// 从数据库中加载租约信息
-	var leasesByIp = make(map[string]leaseInfo)
-	var leasesByFQDN = make(map[string]leaseInfo)
 	if dlIfce.AddressPool != "" {
 		rows, err := DB.Query("SELECT mac_address, ip_address, fqdn, dart_version, Expiry FROM dhcp_leases")
 		if err != nil {
