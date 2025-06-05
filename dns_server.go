@@ -188,18 +188,30 @@ func (s *DNSServer) startServer(port int) {
 }
 
 func (s *DNSServer) respondAsDomainAgent(Qtype uint16, queriedDomain string, outLI *DownLinkInterface, inLI *LinkInterface, w dns.ResponseWriter, r *dns.Msg) {
+	var ip net.IP
+	switch LI := inLI.Owner.(type) {
+	case *UpLinkInterface:
+		if LI.ResolvableIP != nil {
+			ip = LI.ResolvableIP
+		} else {
+			ip = LI.ipNet.IP
+		}
+	case *DownLinkInterface:
+		ip = LI.ipNet.IP
+	}
+
 	switch Qtype {
 	case dns.TypeA:
 		if queriedDomain == outLI.Domain || queriedDomain == DART_GATEWAY_PREFIX+outLI.Domain || queriedDomain == NAME_SERVER_PREFIX+outLI.Domain {
-			s.respondWithDartGateway(w, r, queriedDomain, outLI.Domain, inLI.ipNet().IP, false) // 如果查询的是网关本身，那么返回不带CNAME的网关地址（因为网关本身不支持DART协议栈:-) ）
+			s.respondWithDartGateway(w, r, queriedDomain, outLI.Domain, ip, false) // 如果查询的是网关本身，那么返回不带CNAME的网关地址（因为网关本身不支持DART协议栈:-) ）
 		} else {
-			s.respondWithDartGateway(w, r, queriedDomain, outLI.Domain, inLI.ipNet().IP, true) // 从父域查询子域的A记录，一律以上联口的IP作答
+			s.respondWithDartGateway(w, r, queriedDomain, outLI.Domain, ip, true) // 从父域查询子域的A记录，一律以上联口的IP作答
 		}
 	case dns.TypeSOA:
 		s.respondWithSOA(w, r, queriedDomain, queriedDomain == outLI.Domain) // 从父域查询子域的SOA记录，假如是子域，则回答SOA记录
 	case dns.TypeNS:
 		if queriedDomain == outLI.Domain {
-			s.respondWithNS(w, r, queriedDomain, inLI.ipNet().IP, true) // 从父域查询子域的NS记录。一律回答“我就是该域的名字服务器”
+			s.respondWithNS(w, r, queriedDomain, ip, true) // 从父域查询子域的NS记录。一律回答“我就是该域的名字服务器”
 		} else {
 			s.respondWithSOA(w, r, queriedDomain, false)
 		}

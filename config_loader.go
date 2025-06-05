@@ -56,6 +56,7 @@ type UpLinkInterface struct {
 	inRootDomain     bool
 	domainCache      map[string]cachedDnsItem
 	cacheLock        sync.Mutex // 新增：用于保护 domainCache 的互斥锁
+	ResolvableIP     net.IP
 }
 
 type DownLinkInterface struct {
@@ -270,6 +271,7 @@ func LoadCONFIG() error {
 			if ns.Equal(CONFIG.Uplink.ipNet.IP) {
 				// 本地的域名已经成功在父域DNS服务器上解析
 				dl.RegistedInUplinkDNS = true
+				CONFIG.Uplink.ResolvableIP = ns
 				logIf("info", "PASS: domain [%s] on interface [%s] has been delegated to [%s] by dns server(s) on uplink interface",
 					dl.Domain, dl.Name, CONFIG.Uplink.ipNet.IP)
 				break
@@ -282,6 +284,7 @@ func LoadCONFIG() error {
 				if ns.Equal(CONFIG.Uplink.PublicIP()) {
 					// 本地的域名已经成功在父域DNS服务器上解析
 					dl.RegistedInUplinkDNS = true
+					CONFIG.Uplink.ResolvableIP = ns
 					logIf("info", "PASS: domain [%s] configured on interface [%s] has been delegated to [%s]",
 						dl.Domain, dl.Name, CONFIG.Uplink.PublicIP())
 					logIf("info", "Caution: you should map udp port %s:%d => %s:%d & %s:%d => %s:%d on NAT gateway",
