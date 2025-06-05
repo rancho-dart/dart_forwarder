@@ -174,7 +174,7 @@ func (fr *ForwardRoutine) handleExceededMTU(suggestedMTU int, ipOfLongPkt *layer
 		return err
 	}
 
-	logIf("warn", "[Downlink NAT-4-DART] ICMP 'packet too big' replied to sender. Suggested MTU: %d", suggestedMTU)
+	logIf("warn", "[Downlink NAT-4-DART] ICMP 'packet too big' sent to sender %s, suggest MTU %d", ipOfLongPkt.SrcIP.String(), suggestedMTU)
 	return nil
 }
 func (fr *ForwardRoutine) processDownlink_Nat_4_Dart() {
