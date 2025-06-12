@@ -13,6 +13,7 @@ install:
 	@echo "Installing dartd as a system service..."
 	install -Dm755 bin/dartd /usr/local/bin/dartd
 	install -Dm644 scripts/dartd.service /etc/systemd/system/dartd.service
+	install -Dm644 config.yaml /etc/dartd.yaml
 	systemctl daemon-reload
 	systemctl enable dartd
 	systemctl start dartd
@@ -24,6 +25,7 @@ uninstall:
 	systemctl disable dartd
 	rm -f /usr/local/bin/dartd
 	rm -f /etc/systemd/system/dartd.service
+	rm -f /etc/dartd.yaml
 	systemctl daemon-reload
 
 # 默认目标
