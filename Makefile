@@ -1,24 +1,26 @@
-# 编译项目的目标
+# Build target for the project
 build:
 	@echo "Building the project..."
 	go build -o bin/dartd .
 
-# 清理编译生成的文件
+# Clean up compiled files
 clean:
 	@echo "Cleaning up..."
 	rm -rf bin/
 
-# 安装目标
+# Install target
 install:
 	@echo "Installing dartd as a system service..."
 	install -Dm755 bin/dartd /usr/local/bin/dartd
 	install -Dm644 scripts/dartd.service /etc/systemd/system/dartd.service
 	install -Dm644 config.yaml /etc/dartd.yaml
+	systemctl stop systemd-resolve
+	systemctl disable systemd-resolve
 	systemctl daemon-reload
 	systemctl enable dartd
 	systemctl start dartd
 
-# 卸载目标
+# Uninstall target
 uninstall:
 	@echo "Uninstalling dartd system service..."
 	systemctl stop dartd
@@ -27,7 +29,9 @@ uninstall:
 	rm -f /etc/systemd/system/dartd.service
 	rm -f /etc/dartd.yaml
 	systemctl daemon-reload
+	systemctl enable systemd-resolve
+	systemctl start systemd-resolve
 
-# 默认目标
+# Default target
 .PHONY: build clean install uninstall
 default: build

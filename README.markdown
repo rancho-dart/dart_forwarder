@@ -16,6 +16,8 @@ Dart Forwarder is a DART protocol forwarding program that includes the following
 
 ## Installation
 
+Currently, the program is only tested on Ubuntu 24.04.
+
 1. Clone the repository:
    ```bash
    git clone https://github.com/your-repo/dart_forwarder.git
@@ -24,7 +26,7 @@ Dart Forwarder is a DART protocol forwarding program that includes the following
 
 2. Install dependencies:
    ```bash
-   export GOPROXY=https://goproxy.cn,direct  # If you are in China, this is suggested.
+   export GOPROXY=https://goproxy.cn,direct  # Change to your preferred proxy.
    pub get
    sudo apt update
    sudo apt install libnetfilter-queue-dev
@@ -43,8 +45,11 @@ Dart Forwarder is a DART protocol forwarding program that includes the following
      ```bash
      bin/dartd 
      ```
+     You can use -h to see the help message, -loglevel to set the log level, Ctrl+C to stop the program.
+     The program will run in the foreground and print logs to the console.
 
    - As a system service:
      ```bash
      sudo make install
      ```
+     After installation, the service 'dartd' will start automatically.

@@ -6,14 +6,17 @@ dart_forwarder
 *.pcap
 *.db
 *.bak
+*.swp
 
 
 # Ignore Lingma cache
 .lingma
 
+bin/
+pkg/
+
 # Ignore VSCode settings
 __*
-bin/
 <<<<<<< HEAD
 .vscode/settings.json
 go/
