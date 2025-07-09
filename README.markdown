@@ -20,7 +20,7 @@ Currently, the program is only tested on Ubuntu 24.04.
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/your-repo/dart_forwarder.git
+   git clone https://github.com/rancho-dart/dart_forwarder.git
    cd dart_forwarder
    ```
 
@@ -38,6 +38,7 @@ Currently, the program is only tested on Ubuntu 24.04.
    ```
 
 4. Configuration file:
+   Copy dart.yaml to /etc/dartd.yaml.
    Edit /etc/dartd.yaml, complete the configuration.
 
 5. Run the program:
