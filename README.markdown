@@ -36,21 +36,29 @@ Currently, the program is only tested on Ubuntu 24.04.
    ```bash
    make
    ```
+   The program will be compiled as 'bin/dartd'.
 
-4. Configuration file:
-   Copy dart.yaml to /etc/dartd.yaml.
-   Edit /etc/dartd.yaml, complete the configuration.
+
+4. Install the program:
+  ```bash
+   sudo make install
+   ```
+   During installation, the program will be installed as system service 'dartd', and the configuration file will be installed as /etc/dartd.yaml.
+   The service is set to start automatically after installation, but maybe can not start automatically at the first time, because the default configuration file is not suitable for your environment.
+
+
 
 5. Run the program:
-   - As a regular program:
-     ```bash
-     bin/dartd 
-     ```
-     You can use -h to see the help message, -loglevel to set the log level, Ctrl+C to stop the program.
-     The program will run in the foreground and print logs to the console.
+   Edit /etc/dartd.yaml, complete the configuration.
+   Then run the program to check whether the configuration is correct or not:
+   ```bash
+   bin/dartd 
+   ```
+   The program will run in the foreground and print logs to the console.
+   You can use -h to see the help message, -loglevel to set the log level(-loglevel=debug2 to print the most detailed info), Ctrl+C to stop the program.
 
-   - As a system service:
-     ```bash
-     sudo make install
-     ```
-     After installation, the service 'dartd' will start automatically.
+   If the program runs successfully (e.g. it doesn't exit with a fatal message), you can press Ctrl+C to break the program and run the program as a system service:
+   ```bash
+   sudo systemctl start dartd
+   ```
+   Or simply reboot the system. The service will start automatically after reboot.
