@@ -27,7 +27,7 @@ Currently, the program is only tested on Ubuntu 24.04.
 2. Install dependencies:
    ```bash
    export GOPROXY=https://goproxy.cn,direct  # Change to your preferred proxy.
-   pub get
+   go mod tidy
    sudo apt update
    sudo apt install libnetfilter-queue-dev
    ```
@@ -72,6 +72,7 @@ Currently, the program is only tested on Ubuntu 24.04.
    ```
    The program will run in the foreground and print logs to the console.
    You can use -h to see the help message, -loglevel to set the log level(-loglevel=debug2 to print the most detailed info), Ctrl+C to stop the program.
+   
       Any time the service can not start sucessfully, you can run it by hand:
       ```bash
       bin/dartd -loglevel=debug2
