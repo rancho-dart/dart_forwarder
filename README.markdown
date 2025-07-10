@@ -40,15 +40,31 @@ Currently, the program is only tested on Ubuntu 24.04.
 
 
 4. Install the program:
-  ```bash
+   ```bash
    sudo make install
    ```
    During installation, the program will be installed as system service 'dartd', and the configuration file will be installed as /etc/dartd.yaml.
    The service is set to start automatically after installation, but maybe can not start automatically at the first time, because the default configuration file is not suitable for your environment.
 
+5. Configure the system:
+  - Edit /etc/sysctl.conf to enable IP forwarding:
+   ```bash
+   net.ipv4.ip_forward=1
+   ```
+   Make sure the forwarding is enabled, otherwise the NFQUEUE forward queue will not get any packets captured.
 
+   - If system is configured as Router-on-stick, you should edit /etc/ufw/sysctl.conf to disable ICMP redirect:
+   ```bash
+   net.ipv4.conf.all.accept_redirects=0
+   net.ipv4.conf.all.send_redirects=0
+   net.ipv4.conf.eth0.send_redirects = 0       # Change 'eth0' to your network interface name.
+   ```
+   - Make it to take effect:
+   ```bash
+   sudo sysctl -p
+   ```
 
-5. Run the program:
+6. Configure the program:
    Edit /etc/dartd.yaml, complete the configuration.
    Then run the program to check whether the configuration is correct or not:
    ```bash
@@ -56,8 +72,15 @@ Currently, the program is only tested on Ubuntu 24.04.
    ```
    The program will run in the foreground and print logs to the console.
    You can use -h to see the help message, -loglevel to set the log level(-loglevel=debug2 to print the most detailed info), Ctrl+C to stop the program.
+   (Any time the service can not start sucessfully, you can run it by hand:
+   ```bash
+   bin/dartd -loglevel=debug2
+   ```
+   to find the accuracy error message.)
 
-   If the program runs successfully (e.g. it doesn't exit with a fatal message), you can press Ctrl+C to break the program and run the program as a system service:
+   If the program runs successfully (e.g. it doesn't exit with a fatal message), you can press Ctrl+C to break the program and run the program as a system service.
+
+7. Start the program as service:
    ```bash
    sudo systemctl start dartd
    ```
