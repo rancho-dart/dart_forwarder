@@ -1,0 +1,25 @@
+# 这是Dart服务器（DHCP & DNS & 转发）的配置文件。
+# DART协议支持单个父域和多个子域，每个域允许有多个接口接入。本程序是DART协议的概念验证原型，目前仅支持单个子域，每域只支持单接口。
+
+uplink:
+  name: ens32
+  dart_domain: cn. # 父域
+  public_ip_resolver: # 用于查找我的公网ip（如果在NAT后面）
+    - http://ifconfig.me
+    - http://api.ipify.org
+    - http://ip.sb
+    - http://ident.me  
+    - http://ip.dnsexit.com
+    - http://ip.tyk.nu
+    - http://ip.changeip.com # 第一行是纯ip
+  dns_servers:
+    - 10.11.0.100
+
+downlinks:
+  - name: ens34
+    address_pool: 10.11.1.100-10.11.1.199
+    domain: bj.cn
+    gateway: 10.11.1.1
+    static_bindings:
+      - mac: "00:0c:29:f1:65:17"
+        ip: "10.11.1.99"

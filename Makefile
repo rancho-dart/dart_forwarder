@@ -14,8 +14,8 @@ install:
 	install -Dm755 bin/dartd /usr/local/bin/dartd
 	install -Dm644 scripts/dartd.service /etc/systemd/system/dartd.service
 	install -Dm644 config.yaml /etc/dartd.yaml
-	systemctl stop systemd-resolve
-	systemctl disable systemd-resolve
+	systemctl stop systemd-resolved
+	systemctl disable systemd-resolved
 	systemctl daemon-reload
 	systemctl enable dartd
 	systemctl start dartd
@@ -29,8 +29,8 @@ uninstall:
 	rm -f /etc/systemd/system/dartd.service
 	rm -f /etc/dartd.yaml
 	systemctl daemon-reload
-	systemctl enable systemd-resolve
-	systemctl start systemd-resolve
+	systemctl enable systemd-resolved
+	systemctl start systemd-resolved
 
 # Default target
 .PHONY: build clean install uninstall
