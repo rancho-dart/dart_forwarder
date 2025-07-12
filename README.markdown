@@ -47,11 +47,13 @@ Currently, the program is only tested on Ubuntu 24.04.
    The service is set to start automatically after installation, but maybe can not start automatically at the first time, because the default configuration file is not suitable for your environment.
 
 5. Configure the system:
-   - Edit /etc/sysctl.conf to enable IP forwarding:
-      ```bash
-      net.ipv4.ip_forward=1
-      ```
-      Make sure the forwarding is enabled, otherwise the NFQUEUE forward queue will not get any packets captured.
+   - dartd uses nfqueue to capture packets, it depends on the following settings:
+      1) Enable IP forwarding
+         Edit /etc/sysctl.conf to enable IP forwarding:
+         ```bash
+         net.ipv4.ip_forward=1
+         ```
+      2) The system has a default route. Otherwise some packets will be dropped instead of being forwarded.
 
    - If system is configured as Router-on-stick, you should edit /etc/ufw/sysctl.conf to disable ICMP redirect:
       ```bash

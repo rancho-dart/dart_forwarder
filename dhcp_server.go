@@ -293,7 +293,7 @@ func (s *DHCPServer) ServeDHCP(p dhcp4.Packet, msgType dhcp4.MessageType, option
 					hostname = dns.Fqdn(string(fqdnBin))
 				}
 
-				fqdn = s.generateFQDN(reqIP.String(), hostname) // Option hostname (if any) is used as the suggested hostname to generate FQDN
+				fqdn = strings.ToLower(s.generateFQDN(reqIP.String(), hostname)) // Option hostname (if any) is used as the suggested hostname to generate FQDN
 			}
 
 			if fqdn != "" {
