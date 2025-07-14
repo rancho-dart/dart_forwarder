@@ -27,7 +27,9 @@ var dnsClient = &dns.Client{
 }
 
 func writeMsgWithDebug(w dns.ResponseWriter, m *dns.Msg) error {
-	logIf("debug1", "DNS response: %s", m.String())
+	if !strings.Contains(m.Question[0].Name, "ubuntu") {
+		logIf("debug1", "DNS response: %s", m.String())
+	}
 	return w.WriteMsg(m)
 }
 
