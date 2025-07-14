@@ -237,6 +237,7 @@ func (s *DHCPServer) ServeDHCP(p dhcp4.Packet, msgType dhcp4.MessageType, option
 	case dhcp4.Discover:
 		// 检查静态绑定
 		if lease, ok := s.staticLeases[mac]; ok {
+			logIf("debug1", "[DHCP DISCOVER] static leased ip allocated: %s for mac %s", lease.IP, mac)
 			return dhcp4.ReplyPacket(p, dhcp4.Offer, s.dlIfce.ipNet.IP, lease.IP, s.leaseDuration,
 				s.options.SelectOrderOrAll(options[dhcp4.OptionParameterRequestList]))
 		}
@@ -244,8 +245,11 @@ func (s *DHCPServer) ServeDHCP(p dhcp4.Packet, msgType dhcp4.MessageType, option
 		// 动态分配IP
 		ip := s.findFreeIP(mac)
 		if ip == nil {
+			logIf("debug1", "[DHCP DISCOVER] DHCP ip pool exhausted, no ip allocated for mac %s", mac)
 			return nil
 		}
+
+		logIf("debug1", "[DHCP DISCOVER] Dynamic ip %s allocated for mac %s", ip, mac)
 		return dhcp4.ReplyPacket(p, dhcp4.Offer, s.dlIfce.ipNet.IP, ip, s.leaseDuration,
 			s.options.SelectOrderOrAll(options[dhcp4.OptionParameterRequestList]))
 	case dhcp4.Request:
@@ -321,7 +325,7 @@ func (s *DHCPServer) ServeDHCP(p dhcp4.Packet, msgType dhcp4.MessageType, option
 					}
 
 					// write to db
-					logIf("debug1", "Write to db: mac=%s, ip=%s, dart_version=%d, fqdn=%s, Expiry=%s\n", mac, reqIP.String(), dartVersion, fqdn, time.Now().Add(s.leaseDuration).Format(time.RFC3339))
+					logIf("debug1", "[DHCP REQUEST] mac=%s, ip=%s, dart_version=%d, fqdn=%s, Expiry=%s\n", mac, reqIP.String(), dartVersion, fqdn, time.Now().Add(s.leaseDuration).Format(time.RFC3339))
 					_, err := DB.Exec("INSERT OR REPLACE INTO dhcp_leases (mac_address, ip_address, dart_version, fqdn, Expiry) VALUES (?, ?, ?, ?, ?)",
 						mac, reqIP.String(), dartVersion, fqdn, time.Now().Add(s.leaseDuration).Format(time.RFC3339))
 					if err != nil {
@@ -349,7 +353,7 @@ func (s *DHCPServer) ServeDHCP(p dhcp4.Packet, msgType dhcp4.MessageType, option
 			}
 		}
 
-		logIf("info", "Delete from db: mac=%s, ip=%s", mac, p.CIAddr())
+		logIf("debug1", "[DHCP RELEASE] mac %s, ip %s", mac, p.CIAddr())
 		_, err := DB.Exec("DELETE FROM dhcp_leases WHERE mac_address = ?", mac)
 		if err != nil {
 			logIf("error", "Failed to delete lease: %v", err)
