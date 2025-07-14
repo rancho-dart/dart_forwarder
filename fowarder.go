@@ -345,7 +345,7 @@ NextPacket:
 
 			udp := udpLayer.(*layers.UDP)
 			logIf("debug2", "[%s] Received udp packet: %s -> %s\n", pktStyle, udp.SrcPort, udp.DstPort)
-			if udp.DstPort != DARTPort {
+			if udp.DstPort != DARTPort || udp.SrcPort < 1024 {
 				break
 			}
 
@@ -372,7 +372,12 @@ NextPacket:
 
 			if dstIp == nil {
 				// DHCP分配表里没有，我们再尝试从域名本身解析出IP
-				oi := outIfce.Owner.(*DownLinkInterface)
+
+				oi, ok := outIfce.Owner.(*DownLinkInterface)
+				if !ok {
+					break // 这是一个端口意外巧合的报文，我们忽略
+				}
+
 				hostname := strings.TrimSuffix(dstFqdn, "."+oi.Domain)
 				var ip net.IP = make(net.IP, 4)
 				if !strings.Contains(hostname, ".") {
