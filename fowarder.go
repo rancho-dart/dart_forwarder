@@ -50,7 +50,7 @@ func (fr *ForwardRoutine) Run() {
 			logIf("info", "Downlink DART FORWARD processing started")
 			fr.processDownlink_DartForward()
 		case Forward:
-			logIf("info", "Downlink NAT-4-DART processing started")
+			logIf("info", "Downlink NAT-DART-4 processing started")
 			fr.processDownlink_Nat_4_Dart()
 		}
 	}
@@ -174,7 +174,7 @@ func (fr *ForwardRoutine) handleExceededMTU(suggestedMTU int, ipOfLongPkt *layer
 		return err
 	}
 
-	logIf("warn", "[Downlink NAT-4-DART] ICMP 'packet too big' sent to sender %s, suggest MTU %d", ipOfLongPkt.SrcIP.String(), suggestedMTU)
+	logIf("warn", "[Downlink NAT-DART-4] ICMP 'packet too big' sent to sender %s, suggest MTU %d", ipOfLongPkt.SrcIP.String(), suggestedMTU)
 	return nil
 }
 func (fr *ForwardRoutine) processDownlink_Nat_4_Dart() {
@@ -193,7 +193,7 @@ NextPacket:
 			if ip == nil {
 				break
 			}
-			logIf("debug2", "[Downlink NAT-4-DART] Received packet: %s -> %s\n", ip.SrcIP, ip.DstIP)
+			logIf("debug2", "[Downlink NAT-DART-4] Received packet: %s -> %s\n", ip.SrcIP, ip.DstIP)
 			// check whether the destip is pseudo ip
 			if !PSEUDO_POOL.isPseudoIP(ip.DstIP) {
 				break
@@ -204,7 +204,7 @@ NextPacket:
 			// 所以如果表中能查到，目标域名和其在上联口所在域中的IP是都可以直接得到
 			DstFqdn, DstIP, DstUdpPort, ok := PSEUDO_POOL.Lookup(ip.DstIP)
 			if !ok {
-				logIf("error", "[Downlink NAT-4-DART] DstIP %s not found in pseudo ip pool\n", ip.DstIP)
+				logIf("error", "[Downlink NAT-DART-4] DstIP %s not found in pseudo ip pool\n", ip.DstIP)
 				packet.SetVerdict(netfilter.NF_DROP)
 				continue NextPacket
 			}
@@ -215,7 +215,7 @@ NextPacket:
 			inLI := fr.ifce.Owner.(*DownLinkInterface) // 报文肯定是下联口接收到的
 			server, ok := DHCP_SERVERS[inLI.Name]
 			if !ok || server == nil {
-				logIf("error", "[Downlink NAT-4-DART] no DHCP server for interface %s\n", inLI.Name)
+				logIf("error", "[Downlink NAT-DART-4] no DHCP server for interface %s\n", inLI.Name)
 				packet.SetVerdict(netfilter.NF_DROP)
 				continue NextPacket
 			}
@@ -270,7 +270,7 @@ NextPacket:
 			err := gopacket.SerializeLayers(buffer, opts, &newIp, udp, dart, gopacket.Payload(dart.Payload))
 
 			if err != nil {
-				logIf("error", "[Downlink NAT-4-DART] Failed to serialize packet: %v", err)
+				logIf("error", "[Downlink NAT-DART-4] Failed to serialize packet: %v", err)
 				packet.SetVerdict(netfilter.NF_DROP)
 				continue NextPacket
 			}
@@ -281,7 +281,7 @@ NextPacket:
 				suggestedMTU := MTU - int(dart.HeaderLen()+8) // UDP头长度为8字节
 				err := fr.handleExceededMTU(suggestedMTU, ip)
 				if err != nil {
-					logIf("error", "[Downlink NAT-4-DART] Failed to handle exceeded MTU: %v", err)
+					logIf("error", "[Downlink NAT-DART-4] Failed to handle exceeded MTU: %v", err)
 				}
 				packet.SetVerdict(netfilter.NF_DROP)
 				continue NextPacket
@@ -289,7 +289,7 @@ NextPacket:
 
 			// hex_dump(buffer.Bytes())
 			if err := fr.SendPacket(&CONFIG.Uplink.LinkInterface, newIp.DstIP, buffer.Bytes()); err != nil {
-				logIf("error", "[Downlink NAT-4-DART] Failed to send packet: %v", err)
+				logIf("error", "[Downlink NAT-DART-4] Failed to send packet: %v", err)
 			}
 
 			packet.SetVerdict(netfilter.NF_DROP)
@@ -587,7 +587,7 @@ func startForwardModule() {
 	for _, DownLink := range CONFIG.Downlinks {
 		createAndStartQueue(queueNo, DownLink.LinkInterface, Forward)
 		if err := rm.AddRule("filter", "FORWARD", []string{"-i", DownLink.Name, "-j", "NFQUEUE", "--queue-num", strconv.Itoa(int(queueNo))}); err != nil {
-			log.Fatalf("Failed to set iptables rule for Downlink NAT-4-DART: %v", err)
+			log.Fatalf("Failed to set iptables rule for Downlink NAT-DART-4: %v", err)
 		}
 		queueNo++
 
