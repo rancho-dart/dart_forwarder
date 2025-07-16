@@ -92,7 +92,7 @@ func (u *UpLinkInterface) lookupNS(domain string) (addrs []net.IP) {
 	for _, dnsServer := range u.DNSServers {
 		nameServers, err := resolveNsRecord(domain, dnsServer)
 		if err != nil {
-			// logIf("error", "Error resolving NS record for %s: %v, try next dns server...\n", domain, err)
+			logIf("error", "Error resolving NS record for %s: %v, try next dns server...\n", domain, err)
 			continue
 		} else if len(nameServers) == 0 {
 			logIf("error", "No NS records found for %s, try next dns server...\n", domain)
