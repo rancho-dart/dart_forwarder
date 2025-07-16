@@ -363,19 +363,20 @@ NextPacket:
 			// srcFqdn := dns.Fqdn(trimIpSuffix(string(dart.SrcFqdn)))
 
 			// 我们先试着从DHCP分配记录里寻找域名对应的IP
-			outIfce, dstIp, supportDart := DNS_SERVER.lookup(dstFqdn)
+			outIfce, lease := DNS_SERVER.lookup(dstFqdn)
 			if outIfce == nil {
 				// 没找到合适的转发接口或目标IP
 				packet.SetVerdict(netfilter.NF_DROP)
 				continue NextPacket
 			}
 
+			dstIp := lease.IP
 			if dstIp == nil {
 				// DHCP分配表里没有，我们再尝试从域名本身解析出IP
 
 				oi, ok := outIfce.Owner.(*DownLinkInterface)
 				if !ok {
-					break // 这是一个端口意外巧合的报文，我们忽略
+					break // 这是一个端口意外巧合的报文，我们忽略，让系统处理这个报文
 				}
 
 				hostname := strings.TrimSuffix(dstFqdn, "."+oi.Domain)
@@ -402,7 +403,21 @@ NextPacket:
 			}
 
 			var err error
-			if supportDart {
+
+			forwardAsDart := lease.DARTVersion > 0 // 如果是DART-Ready由应当转发DART报文
+
+			if len(dstFqdn) > len(lease.FQDN) {
+				if lease.Delegated {
+					// 这个报文是发往当前子域下的派生出的子域内主机的，即使网关自身的协议栈不支持DART，仍然需要作为DART报文转发
+					forwardAsDart = true
+				} else {
+					// 发往派生子域，但对应的域没有被委派（对应的设备没有转发DART报文的能力），那么只能Drop报文
+					packet.SetVerdict(netfilter.NF_DROP)
+					continue NextPacket
+				}
+			}
+
+			if forwardAsDart {
 				pktStyle = "Uplink DART FORWARD"
 				// 更新 IP 地址
 				ip.SrcIP = outIfce.Addr()

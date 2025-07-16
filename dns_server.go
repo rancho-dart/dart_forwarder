@@ -130,44 +130,47 @@ func resolveNsRecord(domain, dnsServer string) (addrs []net.IP, err error) {
 }
 
 func findSubDomainUnder(domain, base string) (string, bool) {
+	// If domain ends with base (i.e., domain is a subdomain of base), return the part of domain that is one level deeper than base.
+	// The purpose is that when the DART gateway forwards packets, it needs to know to whom to forward the packet.
+	// If the destination address domain is several levels deeper than base, the gateway only forwards to the gateway one level deeper.
+
 	_domain := "." + domain
 	_base := "." + base
 	if !strings.HasSuffix(_domain, _base) {
 		return "", false
 	}
 
-	// 去掉 base 前面的部分，找到前一个 label
+	// Remove the base part from the end, and find the previous label.
 	prefix := strings.TrimSuffix(_domain, _base)
 
-	// 找到最后一个 "."，表示下一个上级域的边界
+	// Find the last ".", which marks the boundary of the next higher-level domain.
 	lastDot := strings.LastIndex(prefix, ".")
 	if lastDot == -1 {
-		// 这是domain==base的情况
+		// This is the case where domain == base.
 		return "", false
 	}
 
-	// 拼回一个完整的 "xxx.base"
+	// Reconstruct a complete "xxx.base"
 	return _domain[lastDot+1:], true
 }
 
-func (s *DNSServer) lookup(fqdn string) (outIfce *LinkInterface, ip net.IP, supportDart bool) {
-	outIfce = s.getOutboundInfo(dns.Fqdn(fqdn)) // Only find in the downlink interfaces!
+func (s *DNSServer) lookup(fqdn string) (*LinkInterface, leaseInfo) {
+	var lease leaseInfo
+	outIfce := s.getOutboundInfo(dns.Fqdn(fqdn)) // Only find in the downlink interfaces!
 	if outIfce != nil {
 		dhcpServer, ok := DHCP_SERVERS[outIfce.Name()]
 		if ok {
 			subDomain, ok := findSubDomainUnder(fqdn, dhcpServer.dlIfce.Domain)
 			if ok {
-				lease, ok := dhcpServer.leasesByFQDN[subDomain]
+				lease, ok = dhcpServer.leasesByFQDN[subDomain]
 				if ok {
-					ip = lease.IP
-					supportDart = lease.DARTVersion > 0
-					return outIfce, ip, supportDart
+					return outIfce, lease
 				}
 			}
 		}
-		return outIfce, nil, false
+		return outIfce, lease // 如果没有找到子域名的绑定记录，那么返回空的 leaseInfo
 	}
-	return nil, nil, false
+	return nil, lease // 如果没有找到匹配的下联口，那么返回 nil 和空的 leaseInfo
 }
 
 // NewDNSServer 创建一个新的 DNS Server 实例
