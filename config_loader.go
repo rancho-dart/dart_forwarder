@@ -69,6 +69,7 @@ type DownLinkInterface struct {
 	PoolTailIP          net.IP
 	ipNet               net.IPNet // ipNet.Address 接口的IP同时用作DHCP SERVER/DNS SERVER/DEFAULT GATEWAY
 	RegistedInUplinkDNS bool
+	NAT44enabled        bool
 }
 
 type Config struct {
@@ -105,7 +106,7 @@ func (u *UpLinkInterface) lookupNS(domain string) (addrs []net.IP) {
 	return nil
 }
 
-func (u *UpLinkInterface) resolveA(fqdn string) (ip net.IP, supportDart bool) {
+func (u *UpLinkInterface) resolveWithCache(fqdn string) (ip net.IP, supportDart bool) {
 	if u.inRootDomain {
 		// 如果一台DART节点在根域，并且没有将自己注册到根域的DNS系统，那么为了报文能够返回，它会将自己的公网IP嵌入到DART报头的源地址中
 		// 格式是这样的：c1.sh.cn.[A-B-C-D]，其中A.B.C.D是它的公网IP
@@ -132,7 +133,7 @@ func (u *UpLinkInterface) resolveA(fqdn string) (ip net.IP, supportDart bool) {
 	u.cacheLock.Unlock() // 新增：解锁
 
 	for _, dnsServer := range u.DNSServers {
-		IPAddresses, supportDart, err := resolveARecord(fqdn, dnsServer, 0)
+		IPAddresses, supportDart, err := resolveByQuery(fqdn, dnsServer, 0)
 		if err != nil {
 			logIf("error", "Error resolving A record for %s: %v, try next dns server...\n", fqdn, err)
 			continue
@@ -161,7 +162,7 @@ func (u *UpLinkInterface) probeLocation(domain string) string {
 		}
 
 		query := "dart-gateway." + domain
-		ip, suppDart := u.resolveA(query)
+		ip, suppDart := u.resolveWithCache(query)
 		if ip != nil && suppDart {
 			return domain
 		}

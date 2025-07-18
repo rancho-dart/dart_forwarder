@@ -27,13 +27,13 @@ var dnsClient = &dns.Client{
 }
 
 func writeMsgWithDebug(w dns.ResponseWriter, m *dns.Msg) error {
-	if !strings.Contains(m.Question[0].Name, "ubuntu") {
-		logIf("debug1", "DNS response: %s", m.String())
-	}
+	// if !strings.Contains(m.Question[0].Name, "ubuntu") {
+	// 	logIf("debug1", "===== DNS response: %s", m.String())
+	// }
 	return w.WriteMsg(m)
 }
 
-func resolveARecord(domain, dnsServer string, depth int) (addrs []net.IP, supportDart bool, err error) {
+func resolveByQuery(domain, dnsServer string, depth int) (addrs []net.IP, supportDart bool, err error) {
 	if depth > 10 {
 		return nil, false, fmt.Errorf("CNAME 链太长，疑似死循环")
 	}
@@ -47,6 +47,20 @@ func resolveARecord(domain, dnsServer string, depth int) (addrs []net.IP, suppor
 	m.SetQuestion(dns.Fqdn(domain), dns.TypeA)
 	m.RecursionDesired = true
 
+	// 插入EDNS0 Option，表明自己是DART网关
+	opt := &dns.OPT{
+		Hdr: dns.RR_Header{
+			Name:   ".",
+			Rrtype: dns.TypeOPT,
+		},
+	}
+	// 假设 DARTOption 是 uint16 类型的 EDNS option code
+	opt.Option = append(opt.Option, &dns.EDNS0_LOCAL{
+		Code: DARTOption,
+		Data: []byte{1}, // 可以根据实际需要设置 Data
+	})
+
+	m.Extra = append(m.Extra, opt)
 	// 使用独立的 dns.Client 进行查询
 	resp, _, err := dnsClient.Exchange(m, dnsServer+":53")
 	if err != nil {
@@ -81,7 +95,7 @@ func resolveARecord(domain, dnsServer string, depth int) (addrs []net.IP, suppor
 	if len(aRecords) > 0 {
 		return aRecords, suppDart, nil
 	} else if lastCname != "" {
-		return resolveARecord(lastCname, dnsServer, depth+1)
+		return resolveByQuery(lastCname, dnsServer, depth+1)
 	}
 	return nil, false, nil
 }
@@ -274,15 +288,34 @@ func (s *DNSServer) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 			switch outLI := outboundIfce.Owner.(type) {
 			case *UpLinkInterface:
 				// 从子域查询父域的记录
+
+				// 查询方有两种可能：支持DART，或者不支持。而DART网关作为特例，又存在两种情况：
+				// 1.操作系统本身不支持DART（因为它是IPv4-only的网关）
+				// 2.其上运行的dartd服务支持DART协议。
 				querierSupportDart := false
 				if DHCP_SERVER, ok := DHCP_SERVERS[inLI.Name]; ok { // 只有downlink接口才会开启DHCP SERVER
 					lease, ok := DHCP_SERVER.leasesByIp[clientIp.String()] // 看看查询方是不是通过DHCP获取的地址
-					if ok && lease.DARTVersion == 1 {                      // 如果没记录，说明是静态配置IP的主机，默认其不支持DART；如果有分配记录，且DARTversion==0,还是不支持DART；
-						querierSupportDart = true
+					if ok {                                                // 如果没记录，说明是静态配置IP的主机，默认其不支持DART；如果有分配记录，且DARTversion==0,还是不支持DART；
+						if lease.DARTVersion > 0 {
+							querierSupportDart = true
+						} else if lease.Delegated {
+							// 一台DART网关在向上级DART网关发出DNS查询的时候，会在EDNS0选项中携带DART选项，通过检查这个选项来判断查询方是否支持DART协议
+						Searching:
+							for _, extra := range r.Extra {
+								if opt, ok := extra.(*dns.OPT); ok {
+									for _, option := range opt.Option {
+										if option.Option() == DARTOption {
+											querierSupportDart = true
+											break Searching
+										}
+									}
+								}
+							}
+						}
 					}
 				}
 
-				ipInParentDomain, queriedSupportDart := outLI.resolveA(queriedDomain)
+				ipInParentDomain, queriedSupportDart := outLI.resolveWithCache(queriedDomain)
 				if ipInParentDomain == nil {
 					s.respondWithNxdomain(w, r)
 					return
@@ -304,7 +337,12 @@ func (s *DNSServer) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 					}
 				} else {
 					// 如果被查询方不支持DART，则以真实地址作答，后面转发时会进行NAT44转换。对于SOA和NS查询当以父域的记录作答
-					s.respondWithForwardQuery(w, r, CONFIG.Uplink.DNSServers)
+					// s.respondWithForwardQuery(w, r, CONFIG.Uplink.DNSServers)
+					if inLI.NAT44enabled {
+						s.respondWithARecord(w, r, queriedDomain, ipInParentDomain)
+					} else {
+						s.respondWithRefusal(w, r) // 如果不支持NAT44，那么拒绝服务
+					}
 					return
 				}
 			case *DownLinkInterface:
@@ -377,8 +415,10 @@ func (s *DNSServer) respondWithDelegate(w dns.ResponseWriter, r *dns.Msg, name s
 	if isDelegated && ip != nil {
 		// s.respondWithNS(w, r, level1SubDomain, ip, false) // 直接返回NS记录符合规范，但查询方并不会去递归解析，所以我们要返回A记录
 		s.respondWithForwardQuery(w, r, []string{ip.String()})
+		logIf("debug1", "respondWithDelegate: %s -> %s", level1SubDomain, ip.String())
 	} else {
 		s.respondWithSOA(w, r, level1SubDomain, false)
+		logIf("debug1", "respondWithDelegate: %s -> SOA", level1SubDomain)
 	}
 }
 
@@ -411,6 +451,7 @@ func (s *DNSServer) respondWithCName(w dns.ResponseWriter, r *dns.Msg, queriedDo
 	m.Answer = append(m.Answer, cname)
 
 	writeMsgWithDebug(w, m)
+	logIf("debug1", "respondWithCName: %s -> %s", queriedDomain, domain)
 }
 
 func forwardQuery(r *dns.Msg, upstream string) (*dns.Msg, error) {
@@ -424,12 +465,14 @@ func forwardQuery(r *dns.Msg, upstream string) (*dns.Msg, error) {
 	}
 	return resp, nil
 }
+
 func (s *DNSServer) respondWithForwardQuery(w dns.ResponseWriter, r *dns.Msg, DNSServers []string) {
 	for _, dnsServer := range DNSServers {
 		resp, err := forwardQuery(r, dnsServer)
 		if err == nil {
 			// 将上游响应直接写回客户端
 			writeMsgWithDebug(w, resp)
+			logIf("debug1", "Forwarded query to %s: %s", dnsServer, r.Question[0].Name)
 			return
 		}
 	}
@@ -473,6 +516,7 @@ func (s *DNSServer) respondWithNS(w dns.ResponseWriter, r *dns.Msg, domain strin
 	m.Extra = append(m.Extra, glue)
 
 	writeMsgWithDebug(w, m)
+	logIf("debug1", "respondWithNS: %s -> %s", domain, ip.String())
 }
 
 func (s *DNSServer) respondWithSOA(w dns.ResponseWriter, r *dns.Msg, authorityDomain string, isAnswer bool) {
@@ -505,10 +549,12 @@ func (s *DNSServer) respondWithSOA(w dns.ResponseWriter, r *dns.Msg, authorityDo
 	}
 
 	writeMsgWithDebug(w, m)
+	logIf("debug1", "respondWithSOA: %s", authorityDomain)
 }
 
 func (s *DNSServer) respondWithNotImplemented(w dns.ResponseWriter, r *dns.Msg) {
 	dns.HandleFailed(w, r)
+	logIf("error", "DNS query not implemented: %s", r.Question[0].Name)
 }
 
 func (s *DNSServer) getInboundInfo(w dns.ResponseWriter) (clientIP net.IP, inboundIfce *LinkInterface) {
@@ -582,6 +628,22 @@ func (s *DNSServer) respondWithPseudoIp(w dns.ResponseWriter, r *dns.Msg, domain
 	if err != nil {
 		logIf("error", "failed to write response:", err)
 	}
+	logIf("debug1", "respondWithPseudoIp: %s -> %s", domain, pseudoIp.String())
+}
+
+func (s *DNSServer) respondWithARecord(w dns.ResponseWriter, r *dns.Msg, domain string, IP net.IP) {
+	m := new(dns.Msg)
+	m.SetReply(r)
+	m.Authoritative = true
+
+	a := &dns.A{
+		Hdr: dns.RR_Header{Name: domain, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
+		A:   IP,
+	}
+	m.Answer = append(m.Answer, a)
+
+	writeMsgWithDebug(w, m)
+	logIf("debug1", "respondWithARecord: %s -> %s", domain, IP.String())
 }
 
 func (s *DNSServer) respondWithDartGateway(w dns.ResponseWriter, r *dns.Msg, domain string, gwdomain string, gwIP net.IP, withCName bool) {
@@ -609,6 +671,7 @@ func (s *DNSServer) respondWithDartGateway(w dns.ResponseWriter, r *dns.Msg, dom
 	m.Answer = append(m.Answer, a)
 
 	writeMsgWithDebug(w, m)
+	logIf("debug1", "respondWithDartGateway: %s -> %s", domain, gwIP.String())
 }
 
 // respondWithRefusal 以“拒绝服务”进行响应
@@ -617,6 +680,7 @@ func (s *DNSServer) respondWithRefusal(w dns.ResponseWriter, r *dns.Msg) {
 	m.SetReply(r)
 	m.Rcode = dns.RcodeRefused
 	writeMsgWithDebug(w, m)
+	logIf("debug1", "respondWithRefusal: %s", r.Question[0].Name)
 }
 
 func (s *DNSServer) respondWithNxdomain(w dns.ResponseWriter, r *dns.Msg) {
@@ -625,6 +689,7 @@ func (s *DNSServer) respondWithNxdomain(w dns.ResponseWriter, r *dns.Msg) {
 	m.Authoritative = true
 	m.Rcode = dns.RcodeNameError
 	writeMsgWithDebug(w, m)
+	logIf("debug1", "respondWithNxdomain: %s", r.Question[0].Name)
 }
 
 func (s *DNSServer) respondWithServerFailure(w dns.ResponseWriter, r *dns.Msg) {
@@ -632,6 +697,7 @@ func (s *DNSServer) respondWithServerFailure(w dns.ResponseWriter, r *dns.Msg) {
 	m.SetReply(r)
 	m.Rcode = dns.RcodeServerFailure
 	writeMsgWithDebug(w, m)
+	logIf("error", "respondWithServerFailure: %s", r.Question[0].Name)
 }
 
 func (s *DNSServer) getDhcpLeasedIp(ifName, domain string) (ip net.IP, supportDart bool, isStatic bool, delegated bool) {
@@ -708,6 +774,7 @@ func (s *DNSServer) respondWithLeasedIP(w dns.ResponseWriter, dnsMsg *dns.Msg, i
 	}
 
 	writeMsgWithDebug(w, m)
+	logIf("debug1", "respondWithLeasedIP: %s -> %s", domain, ip.String())
 }
 
 // startDNSServerModule 启动 DNS Server 模块

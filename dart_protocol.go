@@ -14,6 +14,7 @@ const (
 	DNSPort         = 53
 	DHCPport        = 67
 	DARTPort        = 0xDA27 // DART 使用的端口号
+	DARTOption		= 0xDA27 // DART 协议在EDNS中的选项值
 )
 
 type DART struct {

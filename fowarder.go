@@ -90,7 +90,7 @@ func (fr *ForwardRoutine) processDownlink_DartForward() {
 
 							// 调用 dnsServer.resolve() 获取目标 IP
 							outIfce := &CONFIG.Uplink
-							destIp, suppDart := outIfce.resolveA(string(dart.DstFqdn))
+							destIp, suppDart := outIfce.resolveWithCache(string(dart.DstFqdn))
 							if destIp == nil {
 								// 没有找到目标 IP，丢弃报文
 								logIf("error", "[Downlink DART FORWARD] Failed to resolve destination IP for %s\n", string(dart.DstFqdn))
@@ -563,7 +563,7 @@ func EnableNAT44(rm *RuleManager) {
 	rm.AddRule("nat", "POSTROUTING", []string{"-p", "udp", "--dport", "55847", "-j", "RETURN"})
 
 	outIfce := CONFIG.Uplink.Name
-	for _, DownLink := range CONFIG.Downlinks {
+	for I, DownLink := range CONFIG.Downlinks {
 		if DownLink.Name == CONFIG.Uplink.Name {
 			logIf("warn", "Router-on-a-stick is enabled on interface %s, so NAT44 is not enabled.", DownLink.Name)
 			continue
@@ -576,7 +576,9 @@ func EnableNAT44(rm *RuleManager) {
 			// 默认ACCEPT的情况下，不加下面的两条规则，也能正常工作。加上这两条规则，不依赖默认配置
 			rm.AddRule("filter", "FORWARD", []string{"-i", DownLink.Name, "-o", outIfce, "-s", private_network, "!", "-d", PSEUDO_IP_POOL, "-m", "conntrack", "--ctstate", "NEW,ESTABLISHED,RELATED", "-j", "ACCEPT"})
 			rm.AddRule("filter", "FORWARD", []string{"-o", DownLink.Name, "-i", outIfce, "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"})
+
 			logIf("info", "Since interface %s has private address, NAT44 is enabled on it.", DownLink.Name)
+			CONFIG.Downlinks[I].NAT44enabled = true
 		}
 	}
 }

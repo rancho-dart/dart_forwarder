@@ -82,6 +82,14 @@ func (p *PseudoIpPool) FindOrAllocate(domain string, realIP net.IP, udpport uint
 		entry.LastUsedAt = time.Now()
 		entry.RealIP = realIP
 		entry.udpPort = udpport
+
+		// 新增：同步数据库
+		if err := p.assignPseudoAddress(domain, entry.PseudoIP.String(), realIP.String(), entry.udpPort); err != nil {
+			logIf("error", "Failed to update pseudo address for %s: %v", domain, err)
+		}
+		// 返回已有的伪地址
+		logIf("debug2", "Reusing pseudo address for %s: %s", domain, entry.PseudoIP)
+		p.mutex.Unlock()
 		return entry.PseudoIP
 	}
 
@@ -107,6 +115,8 @@ func (p *PseudoIpPool) FindOrAllocate(domain string, realIP net.IP, udpport uint
 				if err := p.assignPseudoAddress(domain, pseudoIP.String(), realIP.String(), entry.udpPort); err != nil {
 					logIf("error", "Failed to assign pseudo address for %s: %v", domain, err)
 				}
+
+				logIf("debug2", "Allocated new pseudo address for %s: %s", domain, pseudoIP)
 				p.mutex.Lock()
 				return pseudoIP
 			}
