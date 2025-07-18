@@ -402,11 +402,22 @@ func (s *DNSServer) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 						}
 					}
 					return
+				default:
+					logIf("error", "Unsupported DNS query type: %d for %s", Qtype, queriedDomain)
+					s.respondWithNotImplemented(w, r) // 其他类型的查询不支持
+					return
 				}
+			default:
+				logIf("error", "Unknown outbound interface type: %T", outLI)
+				return
 			}
+		default:
+			logIf("error", "Unknown inbound interface type: %T", inLI)
+			return
 		}
 	}
 
+	logIf("error", "Unsupported DNS query: %s", r.Question[0].Name)
 	s.respondWithNotImplemented(w, r)
 }
 
