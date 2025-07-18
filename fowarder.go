@@ -586,7 +586,7 @@ func EnableNAT44(rm *RuleManager) {
 func startForwardModule() {
 
 	rm := NewRuleManager()
-	go rm.CleanupOnSignal()
+	go rm.CleanupOnSignal(&WG)
 
 	logIf("info", "Creating queues & iptable rules to capture packets...")
 

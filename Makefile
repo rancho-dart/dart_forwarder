@@ -7,6 +7,7 @@ build:
 clean:
 	@echo "Cleaning up..."
 	rm -rf bin/
+	@echo "Build directory cleaned."
 
 # Install target
 install:
@@ -19,6 +20,7 @@ install:
 	systemctl daemon-reload
 	systemctl enable dartd
 	systemctl start dartd
+	@echo "dartd service has been installed, now you need to edit the config file /etc/dartd.yaml to let it start successfully."
 
 # Uninstall target
 uninstall:
@@ -31,7 +33,16 @@ uninstall:
 	systemctl daemon-reload
 	systemctl enable systemd-resolved
 	systemctl start systemd-resolved
-
+	@echo "dartd service has been uninstalled."
+	
+# Upgrade target
+upgrade:
+	@echo "Upgrading dartd system service..."
+	systemctl stop dartd
+	install -Dm755 bin/dartd /usr/local/bin/dartd
+	systemctl start dartd
+	@echo "Upgrade complete."
+	
 # Default target
 .PHONY: build clean install uninstall
 default: build

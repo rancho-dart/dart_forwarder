@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 
 	"github.com/coreos/go-iptables/iptables"
@@ -60,12 +61,16 @@ func (rm *RuleManager) Cleanup() {
 	}
 }
 
-func (rm *RuleManager) CleanupOnSignal() {
+func (rm *RuleManager) CleanupOnSignal(wg *sync.WaitGroup) {
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, syscall.SIGINT, syscall.SIGTERM)
-	<-c
-	log.Println()
-	rm.Cleanup()
-	logIf("info", "Exit.")
-	os.Exit(0)
+	logIf("debug1", "Signal handler registered for rules cleanup on exit")
+
+	go func() {
+		<-c
+		log.Println()
+		rm.Cleanup()
+		logIf("info", "RuleManager cleanup done.")
+		wg.Done()
+	}()
 }

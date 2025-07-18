@@ -205,7 +205,7 @@ func (s *DNSServer) Start() {
 func (s *DNSServer) startServer(port int) {
 	server := &dns.Server{Addr: fmt.Sprintf(":%d", port), Net: "udp"}
 	server.Handler = s
-	logIf("info", "DNS Server started on port %d\n", port)
+	logIf("info", "DNS Server started\n")
 	if err := server.ListenAndServe(); err != nil {
 		log.Fatalf("Failed to start DNS server:[%v]\n", err)
 	}
@@ -418,7 +418,7 @@ func (s *DNSServer) respondWithDelegate(w dns.ResponseWriter, r *dns.Msg, name s
 		logIf("debug1", "respondWithDelegate: %s -> %s", level1SubDomain, ip.String())
 	} else {
 		s.respondWithSOA(w, r, level1SubDomain, false)
-		logIf("debug1", "respondWithDelegate: %s -> SOA", level1SubDomain)
+		logIf("debug2", "respondWithDelegate: %s -> SOA", level1SubDomain)
 	}
 }
 
@@ -549,7 +549,7 @@ func (s *DNSServer) respondWithSOA(w dns.ResponseWriter, r *dns.Msg, authorityDo
 	}
 
 	writeMsgWithDebug(w, m)
-	logIf("debug1", "respondWithSOA: %s", authorityDomain)
+	logIf("debug2", "respondWithSOA: %s", authorityDomain)
 }
 
 func (s *DNSServer) respondWithNotImplemented(w dns.ResponseWriter, r *dns.Msg) {
@@ -680,7 +680,7 @@ func (s *DNSServer) respondWithRefusal(w dns.ResponseWriter, r *dns.Msg) {
 	m.SetReply(r)
 	m.Rcode = dns.RcodeRefused
 	writeMsgWithDebug(w, m)
-	logIf("debug1", "respondWithRefusal: %s", r.Question[0].Name)
+	logIf("debug2", "respondWithRefusal: %s", r.Question[0].Name)
 }
 
 func (s *DNSServer) respondWithNxdomain(w dns.ResponseWriter, r *dns.Msg) {
@@ -689,7 +689,7 @@ func (s *DNSServer) respondWithNxdomain(w dns.ResponseWriter, r *dns.Msg) {
 	m.Authoritative = true
 	m.Rcode = dns.RcodeNameError
 	writeMsgWithDebug(w, m)
-	logIf("debug1", "respondWithNxdomain: %s", r.Question[0].Name)
+	logIf("debug2", "respondWithNxdomain: %s", r.Question[0].Name)
 }
 
 func (s *DNSServer) respondWithServerFailure(w dns.ResponseWriter, r *dns.Msg) {

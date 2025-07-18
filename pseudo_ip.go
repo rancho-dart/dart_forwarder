@@ -11,8 +11,11 @@ import (
 	"encoding/binary"
 	"log"
 	"net"
+	"os"
+	"os/signal"
 	"strconv"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -54,9 +57,11 @@ func NewPseudoIpPool(ttl time.Duration, cidr string) *PseudoIpPool {
 		domainMap: make(map[string]*PseudoIpEntry),
 		ipMap:     make(map[uint32]*PseudoIpEntry),
 	}
-	p.loadPseudoAddresses() // 新增：自动加载数据库记录
 
-	// 新增：设置定时任务，每天凌晨3点执行CleanupExpired
+	logIf("info", "Pseudo IP pool initialized with CIDR %s, head: %s, tail: %s", cidr, uint32ToIP(head), uint32ToIP(tail))
+	logIf("info", "Pseudo IP pool will clean up expired entries every day at 3 AM")
+
+	// 设置定时任务，每天凌晨3点执行CleanupExpired
 	go func() {
 		for {
 			now := time.Now()
@@ -68,6 +73,9 @@ func NewPseudoIpPool(ttl time.Duration, cidr string) *PseudoIpPool {
 			p.CleanupExpired()
 		}
 	}()
+
+	p.loadPseudoAddresses() // 自动加载数据库记录
+	p.BackupOnSignal(&WG)   // 注册信号处理，退出前保存伪地址池
 
 	return p
 }
@@ -83,13 +91,8 @@ func (p *PseudoIpPool) FindOrAllocate(domain string, realIP net.IP, udpport uint
 		entry.RealIP = realIP
 		entry.udpPort = udpport
 
-		// 新增：同步数据库
-		if err := p.assignPseudoAddress(domain, entry.PseudoIP.String(), realIP.String(), entry.udpPort); err != nil {
-			logIf("error", "Failed to update pseudo address for %s: %v", domain, err)
-		}
 		// 返回已有的伪地址
 		logIf("debug2", "Reusing pseudo address for %s: %s", domain, entry.PseudoIP)
-		p.mutex.Unlock()
 		return entry.PseudoIP
 	}
 
@@ -110,14 +113,8 @@ func (p *PseudoIpPool) FindOrAllocate(domain string, realIP net.IP, udpport uint
 				p.domainMap[domain] = entry
 				p.ipMap[ipInt] = entry
 				p.next = ipInt + 1
-				p.mutex.Unlock()
-				// 新增：同步数据库
-				if err := p.assignPseudoAddress(domain, pseudoIP.String(), realIP.String(), entry.udpPort); err != nil {
-					logIf("error", "Failed to assign pseudo address for %s: %v", domain, err)
-				}
 
 				logIf("debug2", "Allocated new pseudo address for %s: %s", domain, pseudoIP)
-				p.mutex.Lock()
 				return pseudoIP
 			}
 		}
@@ -164,10 +161,6 @@ func (p *PseudoIpPool) CleanupExpired() {
 			delete(p.ipMap, ipInt)
 			domain := entry.Domain
 			delete(p.domainMap, domain)
-			// 新增：同步数据库
-			if err := p.releasePseudoAddress(domain); err != nil {
-				logIf("error", "Failed to release pseudo address for %s: %v", domain, err)
-			}
 		}
 	}
 }
@@ -183,17 +176,36 @@ func uint32ToIP(i uint32) net.IP {
 	return ip
 }
 
-// 分配伪地址时同步数据库
-func (p *PseudoIpPool) assignPseudoAddress(domain, pseudoIP, realIP string, udpPort uint16) error {
-	_, err := DB.Exec("INSERT INTO pseudo_addresses (Domain, PseudoIP, RealIP, udpPort, LastUsedAt) VALUES (?, ?, ?, ?, ?)",
-		domain, pseudoIP, realIP, udpPort, time.Now().Format(time.RFC3339))
-	return err
-}
+func (p *PseudoIpPool) SaveAllPseudoAddresses() error {
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
 
-// 回收伪地址时同步数据库
-func (p *PseudoIpPool) releasePseudoAddress(domain string) error {
-	_, err := DB.Exec("DELETE FROM pseudo_addresses WHERE Domain = ?", domain)
-	return err
+	tx, err := DB.Begin()
+	if err != nil {
+		return err
+	}
+	// 清空表
+	_, err = tx.Exec("DELETE FROM pseudo_addresses")
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	stmt, err := tx.Prepare("INSERT or REPLACE INTO pseudo_addresses (Domain, PseudoIP, RealIP, udpPort, LastUsedAt) VALUES (?, ?, ?, ?, ?)")
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
+	defer stmt.Close()
+
+	for _, entry := range p.domainMap {
+		_, err := stmt.Exec(entry.Domain, entry.PseudoIP.String(), entry.RealIP.String(), entry.udpPort, entry.LastUsedAt.Format(time.RFC3339))
+		if err != nil {
+			tx.Rollback()
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // 加载伪地址分配记录
@@ -262,6 +274,27 @@ func (p *PseudoIpPool) loadPseudoAddresses() {
 		p.domainMap[domain] = entry
 		p.ipMap[ipInt] = entry
 	}
+
+	logIf("info", "Loaded %d pseudo addresses from database", len(p.domainMap))
+}
+
+// 注册信号处理，退出前保存伪地址池
+
+func (p *PseudoIpPool) BackupOnSignal(wg *sync.WaitGroup) {
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	logIf("debug1", "Signal handler registered for saving pseudo addresses on exit")
+
+	go func() {
+		<-sigChan
+		logIf("info", "Saving pseudo addresses...")
+		if err := p.SaveAllPseudoAddresses(); err != nil {
+			logIf("error", "Failed to save pseudo addresses: %v", err)
+		} else {
+			logIf("info", "Pseudo addresses saved successfully.")
+		}
+		wg.Done()
+	}()
 }
 
 func init() {

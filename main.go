@@ -16,6 +16,8 @@ const (
 	SMALL_VERSION = 0
 )
 
+var WG sync.WaitGroup
+
 // 控制日志条目输出的辅助函数
 var loglevel *string
 var logIf = func(level string, format string, v ...interface{}) {
@@ -53,32 +55,30 @@ func main() {
 		log.Fatalf("Error loading config: %v", err)
 	}
 
-	// 1.启动 Forward 模块
-	var wg sync.WaitGroup
-
-	// 启动 DNS Server 模块
-	wg.Add(1)
+	// 1.启动 DNS Server 模块
+	WG.Add(1)
 	go func() {
-		defer wg.Done()
+		defer WG.Done()
 		startDNSServerModule()
 	}()
 
 	// 2.启动 DHCP Server 模块
-	wg.Add(1)
+	WG.Add(1)
 	go func() {
-		defer wg.Done()
+		defer WG.Done()
 		startDHCPServerModule()
 	}()
 
 	time.Sleep(200 * time.Millisecond)
 
 	// Forwarder在启动的时候会检查配置的域名是否可从上联口解析，因此需要放在最后启动
-	wg.Add(1)
+	// 3.启动 Forwarder 模块
+	WG.Add(1)
 	go func() {
-		defer wg.Done()
+		defer WG.Done()
 		startForwardModule()
 	}()
 
 	// 等待所有模块完成
-	wg.Wait()
+	WG.Wait()
 }
