@@ -191,15 +191,15 @@ func (li *LinkInterface) Addr() net.IP {
 	return nil
 }
 
-func (li *LinkInterface) ipNet() net.IPNet {
-	switch v := li.Owner.(type) {
-	case *DownLinkInterface:
-		return v.ipNet
-	case *UpLinkInterface:
-		return v.ipNet
-	}
-	return net.IPNet{}
-}
+// func (li *LinkInterface) ipNet() net.IPNet {
+// 	switch v := li.Owner.(type) {
+// 	case *DownLinkInterface:
+// 		return v.ipNet
+// 	case *UpLinkInterface:
+// 		return v.ipNet
+// 	}
+// 	return net.IPNet{}
+// }
 
 func findIpNetsOfIfce(ifName string) ([]net.IPNet, error) {
 	ifObj, err := net.InterfaceByName(ifName)

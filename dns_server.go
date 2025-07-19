@@ -26,11 +26,14 @@ var dnsClient = &dns.Client{
 	Timeout: 3 * time.Second,
 }
 
-func writeMsgWithDebug(w dns.ResponseWriter, m *dns.Msg) error {
+func writeMsgWithDebug(w dns.ResponseWriter, m *dns.Msg) {
 	// if !strings.Contains(m.Question[0].Name, "ubuntu") {
 	// 	logIf("debug1", "===== DNS response: %s", m.String())
 	// }
-	return w.WriteMsg(m)
+	err := w.WriteMsg(m)
+	if err != nil {
+		logIf("error", "failed to write response:", err)
+	}
 }
 
 func resolveByQuery(domain, dnsServer string, depth int) (addrs []net.IP, supportDart bool, err error) {
@@ -242,6 +245,32 @@ func (s *DNSServer) respondAsDomainAgent(Qtype uint16, queriedDomain string, out
 	}
 }
 
+func (s *DNSServer) querierSupportDart(ifceName string, querierIP net.IP, r *dns.Msg) bool {
+	if DHCP_SERVER, ok := DHCP_SERVERS[ifceName]; ok { // 只有downlink接口才会开启DHCP SERVER
+		lease, ok := DHCP_SERVER.leasesByIp[querierIP.String()] // 看看查询方是不是通过DHCP获取的地址
+		if ok {                                                 // 如果有分配记录
+			if lease.DARTVersion > 0 { // 通过DARTVersion即可判断是否支持DART
+				return true
+			}
+
+			if lease.Delegated { // 但DART网关更复杂一点。可能DART网关本身不支持DART，但其上运行的dartd是支持DART的，此时需要通过EDNS0选项来判断
+				// 一台DART网关在向上级DART网关发出DNS查询的时候，会在EDNS0选项中携带DART选项，通过检查这个选项来判断查询方是否支持DART协议
+				for _, extra := range r.Extra {
+					if opt, ok := extra.(*dns.OPT); ok {
+						for _, option := range opt.Option {
+							if option.Option() == DARTOption {
+								return true
+							}
+						}
+					}
+				}
+			}
+		} //如果没记录，说明是静态配置IP的主机，默认其不支持DART
+	} // 如果接口上没有开启DHCP SERVER，默认其不支持DART
+
+	return false
+}
+
 // ServeDNS 处理 DNS 查询
 func (s *DNSServer) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 
@@ -251,6 +280,7 @@ func (s *DNSServer) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 		Qtype := r.Question[0].Qtype
 
 		clientIp, inboundIfce := s.getInboundInfo(w)
+		logIf("debug1", "Received DNS query from interface %s ip %s for %s, Qtype: %d", inboundIfce.Name(), clientIp.String(), queriedDomain, Qtype)
 
 		// 先处理反查域名的请求
 		if Qtype == dns.TypePTR && r.Question[0].Qclass == dns.ClassINET {
@@ -283,6 +313,11 @@ func (s *DNSServer) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 				return
 			case *DownLinkInterface:
 				s.respondAsDomainAgent(Qtype, queriedDomain, outLI, &inLI.LinkInterface, w, r)
+				return
+			default:
+				s.respondWithRefusal(w, r)
+				logIf("error", "unknown outbound interface type: %v", outLI)
+				return
 			}
 		case *DownLinkInterface:
 			switch outLI := outboundIfce.Owner.(type) {
@@ -292,28 +327,7 @@ func (s *DNSServer) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 				// 查询方有两种可能：支持DART，或者不支持。而DART网关作为特例，又存在两种情况：
 				// 1.操作系统本身不支持DART（因为它是IPv4-only的网关）
 				// 2.其上运行的dartd服务支持DART协议。
-				querierSupportDart := false
-				if DHCP_SERVER, ok := DHCP_SERVERS[inLI.Name]; ok { // 只有downlink接口才会开启DHCP SERVER
-					lease, ok := DHCP_SERVER.leasesByIp[clientIp.String()] // 看看查询方是不是通过DHCP获取的地址
-					if ok {                                                // 如果没记录，说明是静态配置IP的主机，默认其不支持DART；如果有分配记录，且DARTversion==0,还是不支持DART；
-						if lease.DARTVersion > 0 {
-							querierSupportDart = true
-						} else if lease.Delegated {
-							// 一台DART网关在向上级DART网关发出DNS查询的时候，会在EDNS0选项中携带DART选项，通过检查这个选项来判断查询方是否支持DART协议
-						Searching:
-							for _, extra := range r.Extra {
-								if opt, ok := extra.(*dns.OPT); ok {
-									for _, option := range opt.Option {
-										if option.Option() == DARTOption {
-											querierSupportDart = true
-											break Searching
-										}
-									}
-								}
-							}
-						}
-					}
-				}
+				querierSupportDart := s.querierSupportDart(inLI.Name, clientIp, r)
 
 				ipInParentDomain, queriedSupportDart := outLI.resolveWithCache(queriedDomain)
 				if ipInParentDomain == nil {
@@ -350,44 +364,45 @@ func (s *DNSServer) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 
 				if outLI.Name != inLI.Name {
 					// 从一个子域查询另一个子域的记录
-					s.respondAsDomainAgent(Qtype, queriedDomain, outLI, &inLI.LinkInterface, w, r)
+					// 本程序是作为DART协议的原型开发的，目前没有计划支持同一网关中同一父域下多个子域之间的互通，因此请不要对这种情况进行测试。
+					// s.respondAsDomainAgent(Qtype, queriedDomain, outLI, &inLI.LinkInterface, w, r)
+					s.respondWithRefusal(w, r)
 					return
 				}
 
+				// 以下发生在同一子域接口配置的DART域内
 				if outLI.Domain != queriedDomain {
-					level1SubDomain, ok := findSubDomainUnder(queriedDomain, outLI.Domain)
+					// 查询的不是子域接口配置的域名本身
+					level1SubDomain, ok := findSubDomainUnder(queriedDomain, outLI.Domain) // 获得比接口上配置的domain深1级的subdomain
 					if !ok {
 						s.respondWithServerFailure(w, r)
 						return
 					}
 
 					if level1SubDomain != queriedDomain {
-						// 这是下联口域中主机查询下联口域的子域
+						// 如果不相等，说明queriedDomain比只深1级的level1SubDomain还要深，说明在派生出的子域内，而level1SubDomain实际是通向子域的网关
 						s.respondWithDelegate(w, r, outLI.Name, level1SubDomain)
 						return
 					}
 				}
 
+				// 如果执行到这里，说明查询的域名要么是接口域名本身，要么比接口域名只深1级
 				switch Qtype {
 				case dns.TypeA:
 					// 同一子域内的主机互相查询，直接返回DHCP分配的IP地址
-					if queriedDomain == inLI.Domain || queriedDomain == DART_GATEWAY_PREFIX+inLI.Domain || queriedDomain == NAME_SERVER_PREFIX+inLI.Domain {
-						s.respondWithDartGateway(w, r, queriedDomain, inLI.Domain, inLI.ipNet.IP, false)
-						return
-					} else {
-						s.respondWithLeasedIP(w, r, inLI.Name, queriedDomain)
-						return
-					}
+					s.handleQueryInsideSubDomain(w, r, outLI, clientIp, queriedDomain)
+					return
 				case dns.TypeSOA:
 					s.respondWithSOA(w, r, queriedDomain, queriedDomain == outLI.Domain) // 从子域查询子域的SOA记录。一律回答“我就是该域的权威服务器”
 					return
 				case dns.TypeNS:
-					// 同一个接口，意味着同一个DART域。
+					// 同一个接口，意味着同一个DART域内的查询
 					var ip net.IP
 					if inLI.Domain == queriedDomain {
 						ip = inLI.ipNet.IP
 						s.respondWithNS(w, r, queriedDomain, ip, true)
-					} else { // queriedDomin 是 inLI.Domain域内的主机
+					} else {
+						// queriedDomin 是 inLI.Domain域内的主机
 						if inLI.RegistedInUplinkDNS {
 							ip, _, _, delegated := s.getDhcpLeasedIp(inLI.Name, queriedDomain)
 							if delegated {
@@ -417,8 +432,60 @@ func (s *DNSServer) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 		}
 	}
 
-	logIf("error", "Unsupported DNS query: %s", r.Question[0].Name)
+	logIf("error", "Unsupported DNS query: %s, opcode is %d", r.Question[0].Name, r.Opcode)
 	s.respondWithNotImplemented(w, r)
+}
+
+func (s *DNSServer) handleQueryInsideSubDomain(w dns.ResponseWriter, r *dns.Msg, dlIfce *DownLinkInterface, querierIP net.IP, queriedDomain string) {
+	// 处理在子域内的查询
+	if dlIfce.Domain == queriedDomain || queriedDomain == DART_GATEWAY_PREFIX+dlIfce.Domain || queriedDomain == NAME_SERVER_PREFIX+dlIfce.Domain {
+		// 如果查询的是接口域名本身，或者两个内置的域名（dart-gateway.<domain>和ns.<domain>），那么直接返回接口的IP地址
+		s.respondWithDartGateway(w, r, queriedDomain, dlIfce.Domain, dlIfce.ipNet.IP, false)
+		return
+	}
+
+	// 判断查询方是否支持DART
+	querierSupportDart := s.querierSupportDart(dlIfce.Name, querierIP, r)
+
+	// 判断被查询方是否支持DART
+	_, queriedLease := s.lookup(queriedDomain)
+	queriedSupportDart := queriedLease.DARTVersion > 0
+	queriedIsGateway := false
+	if !queriedSupportDart && queriedLease.Delegated {
+		if dlIfce != nil {
+			// 如果被查询方支持DART，那么返回A记录
+			if len(queriedDomain) > len(dlIfce.Domain) {
+				queriedSupportDart = true
+				queriedIsGateway = true
+			}
+		}
+	}
+
+	// // 这段代码是下面的switch语句的真实逻辑，写成switch语句是为了方便阅读
+	// if queriedSupportDart {
+	// 	if querierSupportDart {
+	// 		s.respondWithDartStyle(w, r, queriedLease.IP, queriedDomain, queriedIsGateway)
+	// 	} else {
+	// 		s.respondWithPseudoIp(w, r, queriedDomain, queriedLease.IP)
+	// 	}
+	// } else {
+	// 	s.respondWithARecord(w, r, queriedDomain, queriedLease.IP)
+	// }
+
+	switch {
+	case !queriedSupportDart:
+		// 被查询方不支持DART，返回A记录
+		s.respondWithARecord(w, r, queriedDomain, queriedLease.IP)
+		return
+	case querierSupportDart:
+		// 双方都支持DART，返回CNAME转接的真实IP。
+		s.respondWithDartStyle(w, r, queriedLease.IP, queriedDomain, queriedIsGateway)
+		return
+	default:
+		// 被查询方支持DART，查询方不支持DART，返回伪地址
+		s.respondWithPseudoIp(w, r, queriedDomain, queriedLease.IP)
+		return
+	}
 }
 
 func (s *DNSServer) respondWithDelegate(w dns.ResponseWriter, r *dns.Msg, name string, level1SubDomain string) {
@@ -601,7 +668,7 @@ func (s *DNSServer) getOutboundInfo(domain string) *LinkInterface {
 }
 
 func (s *DNSServer) respondWithPseudoIp(w dns.ResponseWriter, r *dns.Msg, domain string, ip net.IP) {
-	// 只有内网不支持DART协议的主机查询外网域名的时候才需要以伪地址响应
+	// 只有内网不支持DART协议的主机查询外网域名或者子域域名的时候才需要以伪地址响应
 
 	// 在返回伪地址之前，我们先查询到真实地址。这样，客户机发送报文到对方的时候，马上就能从伪地址映射表中拿到真实地址
 	pseudoIp := PSEUDO_POOL.FindOrAllocate(domain, ip, DARTPort).To4() // 我们主动发起连接的时候，目标主机必须在默认的DARTPort收取UDP报文
@@ -614,7 +681,16 @@ func (s *DNSServer) respondWithPseudoIp(w dns.ResponseWriter, r *dns.Msg, domain
 	m := new(dns.Msg)
 	m.SetReply(r)
 
-	AName := fmt.Sprintf("%d.%d.%d.%d.in-addr.arpa.", ip[3], ip[2], ip[1], ip[0])
+	var AName string
+	var parentDomain string
+	firstDot := strings.Index(domain, ".")
+	if firstDot == -1 {
+		parentDomain = domain
+	} else {
+		parentDomain = domain[firstDot+1:]
+	}
+	AName = fmt.Sprintf("[%s].%s", ip.String(), parentDomain) // "[]"实际上不属于合法的DNS字符集，不过看起来客户端也不会验证其合法性。这种返回格式不是DART协议的一部分，只是试图返回一个对人稍微有点意义的CNAME
+
 	m.Answer = append(m.Answer, &dns.CNAME{
 		Hdr: dns.RR_Header{
 			Name:   domain,
@@ -635,10 +711,8 @@ func (s *DNSServer) respondWithPseudoIp(w dns.ResponseWriter, r *dns.Msg, domain
 		A: pseudoIp,
 	})
 
-	err := writeMsgWithDebug(w, m)
-	if err != nil {
-		logIf("error", "failed to write response:", err)
-	}
+	writeMsgWithDebug(w, m)
+
 	logIf("debug1", "respondWithPseudoIp: %s -> %s", domain, pseudoIp.String())
 }
 
@@ -735,54 +809,39 @@ func (s *DNSServer) getDhcpLeasedIp(ifName, domain string) (ip net.IP, supportDa
 	return nil, false, false, false
 }
 
-// respondWithLeasedIP 查询 DHCP SERVER 分配的地址并进行响应
-func (s *DNSServer) respondWithLeasedIP(w dns.ResponseWriter, dnsMsg *dns.Msg, ifName, domain string) {
-	// TODO: 这里要区分是本域的还是子域的域名
-	ip, supportDart, _, delegated := s.getDhcpLeasedIp(ifName, domain)
-	if ip == nil {
-		s.respondWithNxdomain(w, dnsMsg)
-		return
-	}
-
+// respondWithDartStyle 查询 DHCP SERVER 分配的地址并进行响应
+func (s *DNSServer) respondWithDartStyle(w dns.ResponseWriter, dnsMsg *dns.Msg, ip net.IP, domain string, isGateway bool) {
 	// 构建 DNS 响应
 	m := new(dns.Msg)
 	m.SetReply(dnsMsg)
 	m.Authoritative = true
 
-	if supportDart && !delegated { // 当前实现比较简单，所有DART网关本身还不支持DART协议
-		// Example:
-		// root@c1:~# dig +noall +answer  c1.sh.cn
-		// c1.sh.cn.               60      IN      CNAME   dart-host.c1.sh.cn.
-		// dart-host.c1.sh.cn.     60      IN      A       10.0.0.99
-
-		// c1.sh.cn is firstly resolved to a 'dart-host.' prefixed cname dart-host.c1.sh.cn, which means this host
-		// supports DART protocol, then dart-host.c1.sh.cn is resolved to the IP address of the host
-
-		cname := &dns.CNAME{
-			Hdr:    dns.RR_Header{Name: domain, Rrtype: dns.TypeCNAME, Class: dns.ClassINET, Ttl: 60},
-			Target: DART_HOST_PREFIX + domain,
-		}
-		m.Answer = append(m.Answer, cname)
-
-		a := &dns.A{
-			Hdr: dns.RR_Header{Name: cname.Target, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
-			A:   ip,
-		}
-		m.Answer = append(m.Answer, a)
+	var cnameTarget string
+	if isGateway { // 当前实现比较简单，所有DART网关本身还不支持DART协议
+		cnameTarget = fmt.Sprintf("%s%s", DART_GATEWAY_PREFIX, domain)
 	} else {
-		// Example:
-		// root@c1:~# dig +noall +answer c2.sh.cn
-		// c2.sh.cn.               60      IN      A       10.0.0.100
-
-		// c2.sh.cn is resolved to the IP address of the host directly, without a 'dart-host.' prefixed cname as bridge
-		// because it doesn't support DART protocol
-
-		a := &dns.A{
-			Hdr: dns.RR_Header{Name: domain, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
-			A:   ip,
-		}
-		m.Answer = append(m.Answer, a)
+		cnameTarget = fmt.Sprintf("%s%s", DART_HOST_PREFIX, domain)
 	}
+
+	// Example:
+	// root@c1:~# dig +noall +answer  c1.sh.cn
+	// c1.sh.cn.               60      IN      CNAME   dart-host.c1.sh.cn.
+	// dart-host.c1.sh.cn.     60      IN      A       10.0.0.99
+
+	// c1.sh.cn is firstly resolved to a 'dart-host.' prefixed cname dart-host.c1.sh.cn, which means this host
+	// supports DART protocol, then dart-host.c1.sh.cn is resolved to the IP address of the host
+
+	cname := &dns.CNAME{
+		Hdr:    dns.RR_Header{Name: domain, Rrtype: dns.TypeCNAME, Class: dns.ClassINET, Ttl: 60},
+		Target: cnameTarget, // dart-host.c1.sh.cn or dart-gateway.c1.sh.cn
+	}
+	m.Answer = append(m.Answer, cname)
+
+	a := &dns.A{
+		Hdr: dns.RR_Header{Name: cname.Target, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
+		A:   ip,
+	}
+	m.Answer = append(m.Answer, a)
 
 	writeMsgWithDebug(w, m)
 	logIf("debug1", "respondWithLeasedIP: %s -> %s", domain, ip.String())
