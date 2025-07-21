@@ -106,48 +106,68 @@ func (u *UpLinkInterface) lookupNS(domain string) (addrs []net.IP) {
 	return nil
 }
 
+func (u *UpLinkInterface) searchInCache(fqdn string) (ok bool, ip net.IP, supportDart bool) {
+	u.cacheLock.Lock() // 新增：加锁
+	defer u.cacheLock.Unlock()
+	cachedDns, ok := u.domainCache[fqdn]
+	if ok {
+		if time.Now().Before(cachedDns.LiveTime) {
+			return ok, cachedDns.IP, cachedDns.Support
+		}
+	}
+
+	return // false, nil, false
+}
+
+func (u *UpLinkInterface) addToCache(fqdn string, ip net.IP, supportDart bool) {
+	u.cacheLock.Lock() // 新增：加锁
+	u.domainCache[fqdn] = cachedDnsItem{IP: ip, Support: supportDart, LiveTime: time.Now().Add(time.Hour * 24)}
+	u.cacheLock.Unlock() // 新增：解锁
+}
+
 func (u *UpLinkInterface) resolveWithCache(fqdn string) (ip net.IP, supportDart bool) {
+	// 在这里设置一个DNS CACHE。先从CACHE中查询，如果命中，直接返回
+	ok, ip, supportDart := u.searchInCache(fqdn)
+	if ok {
+		return ip, supportDart
+	}
+
 	if u.inRootDomain {
 		// 如果一台DART节点在根域，并且没有将自己注册到根域的DNS系统，那么为了报文能够返回，它会将自己的公网IP嵌入到DART报头的源地址中
 		// 格式是这样的：c1.sh.cn.[A-B-C-D]，其中A.B.C.D是它的公网IP
 		// 如果本设备的上联口直接接入IPv4的根域，那么我们先看看能否从FQDN中解析出IPv4地址
 		parts := strings.Split(fqdn, ".")
 		lastPart := parts[len(parts)-1]
-		ip := make(net.IP, 4)
-		n, err := fmt.Sscanf(lastPart, "[%d-%d-%d-%d]", &ip[0], &ip[1], &ip[2], &ip[3])
+		_ip := make(net.IP, 4)
+		n, err := fmt.Sscanf(lastPart, "[%d-%d-%d-%d]", &_ip[0], &_ip[1], &_ip[2], &_ip[3])
 		if err == nil && n == 4 {
-			return ip, true
+			ip = _ip
+			supportDart = true
 		}
-		// 如果解析失败，说明fqdn中没有嵌入IP。那就进入正常的DNS解析流程
 	}
 
-	// 在这里设置一个DNS CACHE。先从CACHE中查询，如果命中，直接返回
-	u.cacheLock.Lock() // 新增：加锁
-	cachedDns, ok := u.domainCache[fqdn]
-	if ok {
-		if time.Now().Before(cachedDns.LiveTime) {
-			u.cacheLock.Unlock() // 新增：解锁
-			return cachedDns.IP, cachedDns.Support
+	if ip == nil { // 如果解析失败，说明fqdn中没有嵌入IP。那就进入正常的DNS解析流程
+		for _, dnsServer := range u.DNSServers {
+			IPAddresses, _supportDart, err := resolveByQuery(fqdn, dnsServer, 0)
+			if err != nil {
+				logIf("error", "Error resolving A record for %s: %v, try next dns server...\n", fqdn, err)
+				continue
+			} else if len(IPAddresses) == 0 {
+				// logIf("error", "No A records found for %s\n", fqdn)
+				return nil, false
+			} else {
+				ip = IPAddresses[0]
+				supportDart = _supportDart
+				break
+			}
 		}
 	}
-	u.cacheLock.Unlock() // 新增：解锁
 
-	for _, dnsServer := range u.DNSServers {
-		IPAddresses, supportDart, err := resolveByQuery(fqdn, dnsServer, 0)
-		if err != nil {
-			logIf("error", "Error resolving A record for %s: %v, try next dns server...\n", fqdn, err)
-			continue
-		} else if len(IPAddresses) == 0 {
-			// logIf("error", "No A records found for %s\n", fqdn)
-			return nil, false
-		} else {
-			u.cacheLock.Lock() // 新增：加锁
-			u.domainCache[fqdn] = cachedDnsItem{IP: IPAddresses[0], Support: supportDart, LiveTime: time.Now().Add(time.Hour * 24)}
-			u.cacheLock.Unlock() // 新增：解锁
-			return IPAddresses[0], supportDart
-		}
+	if ip != nil {
+		u.addToCache(fqdn, ip, supportDart)
 	}
-	return nil, false
+
+	return
 }
 
 func (u *UpLinkInterface) probeLocation(domain string) string {

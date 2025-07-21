@@ -171,23 +171,24 @@ func findSubDomainUnder(domain, base string) (string, bool) {
 	return _domain[lastDot+1:], true
 }
 
-func (s *DNSServer) lookup(fqdn string) (*LinkInterface, leaseInfo) {
+func (s *DNSServer) getForwardInfo(fqdn string) (*LinkInterface, leaseInfo) {
 	var lease leaseInfo
-	outIfce := s.getOutboundInfo(dns.Fqdn(fqdn)) // Only find in the downlink interfaces!
-	if outIfce != nil {
-		dhcpServer, ok := DHCP_SERVERS[outIfce.Name()]
+	outboundIfce := s.getOutboundIfce(dns.Fqdn(fqdn))
+
+	if outboundIfce != nil {
+		dhcpServer, ok := DHCP_SERVERS[outboundIfce.Name()]
 		if ok {
 			subDomain, ok := findSubDomainUnder(fqdn, dhcpServer.dlIfce.Domain)
 			if ok {
 				lease, ok = dhcpServer.leasesByFQDN[subDomain]
 				if ok {
-					return outIfce, lease
+					return outboundIfce, lease
 				}
 			}
 		}
-		return outIfce, lease // 如果没有找到子域名的绑定记录，那么返回空的 leaseInfo
+		return outboundIfce, lease // 如果没有找到子域名的绑定记录，那么返回空的 leaseInfo
 	}
-	return nil, lease // 如果没有找到匹配的下联口，那么返回 nil 和空的 leaseInfo
+	return nil, lease // 如果没有找到匹配的接口，那么返回 nil 和空的 leaseInfo（理论上不会，因为上联口是默认接口，除非没有配置上联口）
 }
 
 // NewDNSServer 创建一个新的 DNS Server 实例
@@ -300,7 +301,7 @@ func (s *DNSServer) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 			}
 		}
 
-		outboundIfce := s.getOutboundInfo(queriedDomain)
+		outboundIfce := s.getOutboundIfce(queriedDomain)
 
 		if outboundIfce == nil {
 			s.respondWithServerFailure(w, r)
@@ -439,7 +440,7 @@ func (s *DNSServer) handleQueryInsideSubDomain(w dns.ResponseWriter, r *dns.Msg,
 	querierSupportDart := s.querierSupportDart(dlIfce.Name, querierIP, r)
 
 	// 判断被查询方是否支持DART
-	_, queriedLease := s.lookup(queriedDomain)
+	_, queriedLease := s.getForwardInfo(queriedDomain)
 	queriedSupportDart := queriedLease.DARTVersion > 0
 	queriedIsGateway := false
 	if !queriedSupportDart && queriedLease.Delegated {
@@ -639,22 +640,16 @@ func (s *DNSServer) getInboundInfo(w dns.ResponseWriter) (clientIP net.IP, inbou
 	return clientIP, &CONFIG.Uplink.LinkInterface
 }
 
-// getOutboundInfo
-func (s *DNSServer) getOutboundInfo(domain string) *LinkInterface {
-	var Match *DownLinkInterface
-
+// getOutboundIfce
+func (s *DNSServer) getOutboundIfce(domain string) *LinkInterface {
+	// 通过匹配后缀判断报文该从哪个接口发送。如果子接口均不匹配，则默认从 uplink 发送
 	for i, iface := range CONFIG.Downlinks {
 		if strings.HasSuffix("."+domain, "."+iface.Domain) {
-			Match = &CONFIG.Downlinks[i]
-			break
+			return &CONFIG.Downlinks[i].LinkInterface
 		}
 	}
 
-	if Match != nil {
-		return &Match.LinkInterface
-	} else {
-		return &CONFIG.Uplink.LinkInterface
-	}
+	return &CONFIG.Uplink.LinkInterface
 }
 
 func getParentDomain(domain string) string {
@@ -774,6 +769,24 @@ func (s *DNSServer) respondWithServerFailure(w dns.ResponseWriter, r *dns.Msg) {
 	m.Rcode = dns.RcodeServerFailure
 	writeMsgWithDebug(w, m)
 	logIf("error", "respondWithServerFailure: %s", r.Question[0].Name)
+}
+
+func (s *DNSServer) getDhcpLeaseByFqdn(ifName, fqdn string) *leaseInfo {
+	dhcpServer, ok := DHCP_SERVERS[ifName]
+	if ok {
+		for i := range dhcpServer.staticLeases {
+			if dhcpServer.staticLeases[i].FQDN == fqdn {
+				lease := dhcpServer.staticLeases[i]
+				return &lease
+			}
+		}
+
+		lease, ok := dhcpServer.leasesByFQDN[fqdn]
+		if ok {
+			return &lease
+		}
+	}
+	return nil
 }
 
 func (s *DNSServer) getDhcpLeasedIp(ifName, domain string) (ip net.IP, supportDart bool, isStatic bool, delegated bool) {
