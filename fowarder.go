@@ -11,6 +11,7 @@ import (
 	"github.com/AkihiroSuda/go-netfilter-queue"
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
+	"github.com/miekg/dns"
 )
 
 type QueueStyle int
@@ -117,7 +118,7 @@ func (fr *ForwardRoutine) processDownlink_Nat_4_Dart() {
 	// 在域中的地址），给报文加上DART报头，设置IP层头的DstIP为真实IP，然后转发给目标主机。
 
 	for packet := range fr.queue.GetPackets() {
-		postTask := fr.encapsulatePacket("Downlink NAT-DART-4", &packet)
+		postTask := fr.encapsulatePacket(&packet)
 
 		switch postTask {
 		case DropPacket:
@@ -191,7 +192,7 @@ func (fr *ForwardRoutine) forwardPacket(pktStyle string, packet *netfilter.NFPac
 	}
 }
 
-func (fr *ForwardRoutine) encapsulatePacket(pktStyle string, packet *netfilter.NFPacket) PostTask {
+func (fr *ForwardRoutine) encapsulatePacket(packet *netfilter.NFPacket) PostTask {
 	ipLayer := packet.Packet.Layer(layers.LayerTypeIPv4)
 	if ipLayer == nil {
 		return AcceptPacket
@@ -337,6 +338,8 @@ func (fr *ForwardRoutine) forwardDartPacket(pktStyle string, ip *layers.IPv4, ud
 		return DropPacket
 	}
 
+	dstFqdn = dns.Fqdn(dstFqdn)
+
 	// 我们先试着从DHCP分配记录里寻找域名对应的IP
 	outboundIfce := DNS_SERVER.getOutboundIfce(dstFqdn)
 	if outboundIfce == nil {
@@ -372,7 +375,13 @@ func (fr *ForwardRoutine) forwardDartPacket(pktStyle string, ip *layers.IPv4, ud
 	case *DownLinkInterface:
 		logIf("debug2", "[%s] Forwarding DART packet to downlink interface %s\n", pktStyle, outboundIfce.Name())
 
-		lease := DNS_SERVER.getDhcpLeaseByFqdn(outboundIfce.Name(), dstFqdn)
+		level1SubDomain, isSubDomain := findSubDomainUnder(dstFqdn, outLI.Domain)
+		if !isSubDomain {
+			logIf("error", "[%s] Destination %s is not in the subdomain %s, dropping packet", pktStyle, dstFqdn, outLI.Domain)
+			return DropPacket
+		}
+
+		lease := DNS_SERVER.getDhcpLeaseByFqdn(outboundIfce.Name(), level1SubDomain)
 		if lease != nil {
 			dstIP = lease.IP
 			if lease.DARTVersion > 0 {

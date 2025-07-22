@@ -146,7 +146,7 @@ func resolveNsRecord(domain, dnsServer string) (addrs []net.IP, err error) {
 	return addrs, nil
 }
 
-func findSubDomainUnder(domain, base string) (string, bool) {
+func findSubDomainUnder(domain, base string) (level1SubDomain string, isSubDomain bool) {
 	// If domain ends with base (i.e., domain is a subdomain of base), return the part of domain that is one level deeper than base.
 	// The purpose is that when the DART gateway forwards packets, it needs to know to whom to forward the packet.
 	// If the destination address domain is several levels deeper than base, the gateway only forwards to the gateway one level deeper.
@@ -345,7 +345,7 @@ func (s *DNSServer) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 						if querierSupportDart {
 							s.respondWithDartGateway(w, r, queriedDomain, inLI.Domain, inLI.ipNet.IP, true)
 						} else {
-							s.respondWithPseudoIp(w, r, queriedDomain, ipInParentDomain)
+							s.respondWithPseudoIp(w, r, queriedDomain, inLI.Domain, ipInParentDomain)
 						}
 						return
 					default:
@@ -407,7 +407,7 @@ func (s *DNSServer) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 					}
 					return
 				case dns.TypeAAAA:
-					s.respondWithRefusal(w, r) // DART协议目前只支持IPv4地址，所以不支持AAAA查询
+					s.respondWithNxdomain(w, r) // DART协议目前只支持IPv4地址
 					return
 				default:
 					logIf("error", "Unsupported DNS query type: %d for %s", Qtype, queriedDomain)
@@ -475,19 +475,7 @@ func (s *DNSServer) handleQueryInsideSubDomain(w dns.ResponseWriter, r *dns.Msg,
 		s.respondWithDartStyle(w, r, queriedLease.IP, queriedDomain, queriedIsGateway)
 	case queriedSupportDart && !querierSupportDart:
 		// 被查询方支持DART，查询方不支持DART，返回伪地址
-		s.respondWithPseudoIp(w, r, queriedDomain, queriedLease.IP)
-	}
-}
-
-func (s *DNSServer) respondWithDelegate(w dns.ResponseWriter, r *dns.Msg, name string, level1SubDomain string) {
-	ip, _, _, isDelegated := s.getDhcpLeasedIp(name, level1SubDomain)
-	if isDelegated && ip != nil {
-		// s.respondWithNS(w, r, level1SubDomain, ip, false) // 直接返回NS记录符合规范，但查询方并不会去递归解析，所以我们要返回A记录
-		s.respondWithForwardQuery(w, r, []string{ip.String()})
-		logIf("debug1", "respondWithDelegate: %s -> %s", level1SubDomain, ip.String())
-	} else {
-		s.respondWithSOA(w, r, level1SubDomain, false)
-		logIf("debug2", "respondWithDelegate: %s -> SOA", level1SubDomain)
+		s.respondWithPseudoIp(w, r, queriedDomain, dlIfce.Domain, queriedLease.IP)
 	}
 }
 
@@ -521,33 +509,6 @@ func (s *DNSServer) respondWithCName(w dns.ResponseWriter, r *dns.Msg, queriedDo
 
 	writeMsgWithDebug(w, m)
 	logIf("debug1", "respondWithCName: %s -> %s", queriedDomain, domain)
-}
-
-func forwardQuery(r *dns.Msg, upstream string) (*dns.Msg, error) {
-	c := new(dns.Client)
-	c.Net = "udp"
-	c.Timeout = 2 * time.Second
-
-	resp, _, err := c.Exchange(r, upstream+":53")
-	if err != nil {
-		return nil, err
-	}
-	return resp, nil
-}
-
-func (s *DNSServer) respondWithForwardQuery(w dns.ResponseWriter, r *dns.Msg, DNSServers []string) {
-	for _, dnsServer := range DNSServers {
-		resp, err := forwardQuery(r, dnsServer)
-		if err == nil {
-			// 将上游响应直接写回客户端
-			writeMsgWithDebug(w, resp)
-			logIf("debug1", "Forwarded query to %s: %s", dnsServer, r.Question[0].Name)
-			return
-		}
-	}
-
-	logIf("error", "Forward failed")
-	s.respondWithServerFailure(w, r)
 }
 
 func (s *DNSServer) respondWithNS(w dns.ResponseWriter, r *dns.Msg, domain string, ip net.IP, nsQueried bool) {
@@ -661,7 +622,7 @@ func getParentDomain(domain string) string {
 	}
 }
 
-func (s *DNSServer) respondWithPseudoIp(w dns.ResponseWriter, r *dns.Msg, domain string, ip net.IP) {
+func (s *DNSServer) respondWithPseudoIp(w dns.ResponseWriter, r *dns.Msg, domain, baseDomain string, ip net.IP) {
 	// 只有内网不支持DART协议的主机查询外网域名或者子域域名的时候才需要以伪地址响应
 
 	// 在返回伪地址之前，我们先查询到真实地址。这样，客户机发送报文到对方的时候，马上就能从伪地址映射表中拿到真实地址
@@ -675,7 +636,7 @@ func (s *DNSServer) respondWithPseudoIp(w dns.ResponseWriter, r *dns.Msg, domain
 	m := new(dns.Msg)
 	m.SetReply(r)
 
-	AName := fmt.Sprintf("[%s].%s", ip.String(), getParentDomain(domain)) // "[]"实际上不属于合法的DNS字符集，不过看起来客户端也不会验证其合法性。这种返回格式不是DART协议的一部分，只是试图返回一个对人稍微有点意义的CNAME
+	AName := fmt.Sprintf("[%s].%s", ip.String(), baseDomain) // "[]"实际上不属于合法的DNS字符集，不过看起来客户端也不会验证其合法性。这种返回格式不是DART协议的一部分，只是试图返回一个对人稍微有点意义的CNAME
 
 	m.Answer = append(m.Answer, &dns.CNAME{
 		Hdr: dns.RR_Header{
