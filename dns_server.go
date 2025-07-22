@@ -595,8 +595,16 @@ func (s *DNSServer) getInboundInfo(w dns.ResponseWriter) (clientIP net.IP, inbou
 	for i, ifce := range CONFIG.Downlinks {
 		if ifce.ipNet.Contains(clientIP) {
 			inboundIfce = &CONFIG.Downlinks[i].LinkInterface
-			return clientIP, inboundIfce
+			break
 		}
+	}
+
+	if inboundIfce != nil {
+		// 单臂路由场景：如果inboundIfce是Uplink且clientIP等于Uplink的默认网关，则实际来自Uplink
+		if inboundIfce.Name() == CONFIG.Uplink.Name && clientIP.Equal(CONFIG.Uplink.defaultGateway) {
+			return clientIP, &CONFIG.Uplink.LinkInterface
+		}
+		return clientIP, inboundIfce
 	}
 	return clientIP, &CONFIG.Uplink.LinkInterface
 }

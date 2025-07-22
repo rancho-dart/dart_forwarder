@@ -53,6 +53,7 @@ type UpLinkInterface struct {
 	DNSServers       []string `yaml:"dns_servers"`
 	_publicIP        net.IP
 	ipNet            net.IPNet
+	defaultGateway   net.IP // 上联口的默认网关
 	inRootDomain     bool
 	domainCache      map[string]cachedDnsItem
 	cacheLock        sync.Mutex // 新增：用于保护 domainCache 的互斥锁
@@ -221,6 +222,46 @@ func (li *LinkInterface) Addr() net.IP {
 // 	return net.IPNet{}
 // }
 
+func findDefaultGatewayOfIfce(ifName string) (net.IP, error) {
+	// 只支持 Linux: 解析 /proc/net/route
+	f, err := os.Open("/proc/net/route")
+	if err != nil {
+		return nil, fmt.Errorf("failed to open /proc/net/route: %v", err)
+	}
+	defer f.Close()
+
+	var line string
+	buf := make([]byte, 4096)
+	n, _ := f.Read(buf)
+	content := string(buf[:n])
+	lines := strings.Split(content, "\n")
+
+	for _, line = range lines[1:] { // 跳过表头
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
+			continue
+		}
+		if fields[0] != ifName {
+			continue
+		}
+		if fields[1] != "00000000" { // 目的地址为 0.0.0.0
+			continue
+		}
+		gatewayHex := fields[2]
+		if len(gatewayHex) != 8 {
+			continue
+		}
+		// 网关是小端序
+		b := make([]byte, 4)
+		for i := 0; i < 4; i++ {
+			fmt.Sscanf(gatewayHex[2*i:2*i+2], "%02x", &b[i])
+		}
+		ip := net.IPv4(b[3], b[2], b[1], b[0]) // 将小端序转换为大端序
+		return ip, nil
+	}
+	return nil, fmt.Errorf("default gateway not found for interface %s", ifName)
+}
+
 func findIpNetsOfIfce(ifName string) ([]net.IPNet, error) {
 	ifObj, err := net.InterfaceByName(ifName)
 	if err != nil {
@@ -271,6 +312,12 @@ func LoadCONFIG() error {
 		return fmt.Errorf("failed to get addresses for interface %s: %v", CONFIG.Uplink.Name, err)
 	}
 	CONFIG.Uplink.ipNet = ipNets[0]
+	defaultGateway, err := findDefaultGatewayOfIfce(CONFIG.Uplink.Name)
+	if err != nil {
+		return fmt.Errorf("failed to find default gateway for interface %s: %v", CONFIG.Uplink.Name, err)
+	}
+	CONFIG.Uplink.defaultGateway = defaultGateway
+	logIf("info", "Uplink interface: %s, %s, %s, %s", CONFIG.Uplink.Name, CONFIG.Uplink.ipNet.IP, CONFIG.Uplink.ipNet.Mask, CONFIG.Uplink.defaultGateway)
 
 	if len(CONFIG.Uplink.DNSServers) == 0 {
 		return fmt.Errorf("Uplink.DNSServers cannot be empty")
