@@ -275,7 +275,7 @@ func (p *PseudoIpPool) loadPseudoAddresses() {
 		p.ipMap[ipInt] = entry
 	}
 
-	logIf("info", "Loaded %d pseudo addresses from database", len(p.domainMap))
+	logIf("debug1", "Loaded %d pseudo addresses from database", len(p.domainMap))
 }
 
 // 注册信号处理，退出前保存伪地址池

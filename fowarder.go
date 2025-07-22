@@ -569,7 +569,7 @@ func EnableNAT44(rm *RuleManager) {
 	outIfce := CONFIG.Uplink.Name
 	for I, DownLink := range CONFIG.Downlinks {
 		if DownLink.Name == CONFIG.Uplink.Name {
-			logIf("warn", "Router-on-a-stick is enabled on interface %s, so NAT44 is not enabled.", DownLink.Name)
+			logIf("warn", "Router-on-a-stick is configured for interface %s, thus NAT44 is not enabled.", DownLink.Name)
 			continue
 		}
 		// 检查下联口的地址是否是私网地址
@@ -613,7 +613,7 @@ func startForwardModule() {
 		queueNo++
 
 		if DownLink.Name == CONFIG.Uplink.Name {
-			logIf("warn", "Router-on-a-stick is enabled on interface %s, so DART packets forwarding is disabled.", DownLink.Name)
+			logIf("warn", "Router-on-a-stick is configured for interface %s, so DART packets forwarding is unnecessary to enable again.", DownLink.Name)
 			continue
 		}
 

@@ -317,7 +317,7 @@ func LoadCONFIG() error {
 		return fmt.Errorf("failed to find default gateway for interface %s: %v", CONFIG.Uplink.Name, err)
 	}
 	CONFIG.Uplink.defaultGateway = defaultGateway
-	logIf("info", "Uplink interface: %s, %s, %s, %s", CONFIG.Uplink.Name, CONFIG.Uplink.ipNet.IP, CONFIG.Uplink.ipNet.Mask, CONFIG.Uplink.defaultGateway)
+	logIf("info", "Uplink interface: %s, ip: %s, mask: %s, default gateway: %s", CONFIG.Uplink.Name, CONFIG.Uplink.ipNet.IP, CONFIG.Uplink.ipNet.Mask, CONFIG.Uplink.defaultGateway)
 
 	if len(CONFIG.Uplink.DNSServers) == 0 {
 		return fmt.Errorf("Uplink.DNSServers cannot be empty")

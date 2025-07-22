@@ -68,11 +68,11 @@ func startDHCPServerModule() {
 			}
 
 			go func(pc net.PacketConn, server *DHCPServer) {
-				logIf("info", "DHCP server started on %s...\n", server.dlIfce.Name)
+				logIf("info", "DHCP server started on interface %s...\n", server.dlIfce.Name)
 				log.Fatal(dhcp4.Serve(pc, server))
 			}(pc, server)
 		} else {
-			logIf("warn", "No valid address pool configured for %s, DHCP server isn't started on it.", iface.Name)
+			logIf("warn", "No valid address pool configured for interface %s, DHCP server isn't started on it.", iface.Name)
 		}
 	}
 
