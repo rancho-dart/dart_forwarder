@@ -394,10 +394,10 @@ func (fr *ForwardRoutine) forwardDartPacket(pktStyle string, ip *layers.IPv4, ud
 		} else {
 			// 如果没有找到对应的DHCP租约记录，说明目标主机不是通过DHCP获得的IP地址。我们尝试从名称当中还原IP
 			maybeIPstring := strings.TrimSuffix(dstFqdn, outLI.Domain)
-			var _ip net.IP = make(net.IP, 4)
-			n, err := fmt.Scanf("[%d-%d-%d-%d].", maybeIPstring, &_ip[0], &_ip[1], &_ip[2], &_ip[3])
+			ip := make(net.IP, 4)
+			n, err := fmt.Sscanf(maybeIPstring, "[%d-%d-%d-%d].", &ip[0], &ip[1], &ip[2], &ip[3])
 			if err == nil && n == 4 {
-				dstIP = _ip
+				dstIP = ip
 			} else {
 				logIf("error", "[%s] Destination %s does not exist, dropping packet", pktStyle, dstFqdn)
 				return DropPacket
