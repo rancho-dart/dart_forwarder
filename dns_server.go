@@ -345,7 +345,13 @@ func (s *DNSServer) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 						if querierSupportDart {
 							s.respondWithDartGateway(w, r, queriedDomain, inLI.Domain, inLI.ipNet.IP, true)
 						} else {
-							s.respondWithPseudoIp(w, r, queriedDomain, inLI.Domain, ipInParentDomain)
+							var baseDomain string
+							if outLI.inRootDomain {
+								baseDomain = ""
+							} else {
+								baseDomain = inLI.Domain
+							}
+							s.respondWithPseudoIp(w, r, queriedDomain, baseDomain, ipInParentDomain)
 						}
 						return
 					default:

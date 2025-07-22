@@ -391,11 +391,17 @@ func (fr *ForwardRoutine) forwardDartPacket(pktStyle string, ip *layers.IPv4, ud
 					forwardAsDart = true // 如果是发往子域的记录，则应当转发DART报文。如果是发给DART网关本身，则应当转发纯IP报文
 				}
 			}
-		}
-
-		if dstIP == nil {
-			logIf("error", "[%s] Destination %s does not exist, dropping packet", pktStyle, dstFqdn)
-			return DropPacket
+		} else {
+			// 如果没有找到对应的DHCP租约记录，说明目标主机不是通过DHCP获得的IP地址。我们尝试从名称当中还原IP
+			maybeIPstring := strings.TrimSuffix(dstFqdn, outLI.Domain)
+			var _ip net.IP = make(net.IP, 4)
+			n, err := fmt.Scanf("[%d-%d-%d-%d].", maybeIPstring, &_ip[0], &_ip[1], &_ip[2], &_ip[3])
+			if err == nil && n == 4 {
+				dstIP = _ip
+			} else {
+				logIf("error", "[%s] Destination %s does not exist, dropping packet", pktStyle, dstFqdn)
+				return DropPacket
+			}
 		}
 	default:
 		logIf("error", "unknown outbound interface type: %v", outboundIfce)
