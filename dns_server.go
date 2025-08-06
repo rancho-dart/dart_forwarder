@@ -323,7 +323,7 @@ func (s *DNSServer) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 				return
 			}
 		case *DownLinkInterface:
-			switch outLI := outboundIfce.Owner.(type) {
+			switch outboundLI := outboundIfce.Owner.(type) {
 			case *UpLinkInterface:
 				// 从子域查询父域的记录
 
@@ -332,7 +332,7 @@ func (s *DNSServer) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 				// 2.其上运行的dartd服务支持DART协议。
 				querierSupportDart := s.querierSupportDart(inLI.Name, clientIp, r)
 
-				ipInParentDomain, queriedSupportDart := outLI.resolveWithCache(queriedDomain)
+				ipInParentDomain, _, queriedSupportDart := outboundLI.resolveWithCache(queriedDomain)
 				if ipInParentDomain == nil {
 					s.respondWithNxdomain(w, r)
 					return
@@ -346,7 +346,7 @@ func (s *DNSServer) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 							s.respondWithDartGateway(w, r, queriedDomain, inLI.Domain, inLI.ipNet.IP, true)
 						} else {
 							var baseDomain string
-							if outLI.inRootDomain {
+							if outboundLI.inRootDomain {
 								baseDomain = ""
 							} else {
 								baseDomain = inLI.Domain
@@ -371,7 +371,7 @@ func (s *DNSServer) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 			case *DownLinkInterface:
 				// 这是子域查询子域的记录
 
-				if outLI.Name != inLI.Name {
+				if outboundLI.Name != inLI.Name {
 					// 从一个子域查询另一个子域的记录
 					// 本程序是作为DART协议的原型开发的，目前没有计划支持同一网关中同一父域下多个子域之间的互通，因此请不要对这种情况进行测试。
 					// s.respondAsDomainAgent(Qtype, queriedDomain, outLI, &inLI.LinkInterface, w, r)
@@ -385,10 +385,10 @@ func (s *DNSServer) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 				switch Qtype {
 				case dns.TypeA:
 					// 同一子域内的主机互相查询，直接返回DHCP分配的IP地址
-					s.handleQueryInsideSubDomain(w, r, outLI, clientIp, queriedDomain)
+					s.handleQueryInsideSubDomain(w, r, outboundLI, clientIp, queriedDomain)
 					return
 				case dns.TypeSOA:
-					s.respondWithSOA(w, r, queriedDomain, queriedDomain == outLI.Domain) // 从子域查询子域的SOA记录。一律回答“我就是该域的权威服务器”
+					s.respondWithSOA(w, r, queriedDomain, queriedDomain == outboundLI.Domain) // 从子域查询子域的SOA记录。一律回答“我就是该域的权威服务器”
 					return
 				case dns.TypeNS:
 					// 同一个接口，意味着同一个DART域内的查询
@@ -421,7 +421,7 @@ func (s *DNSServer) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 					return
 				}
 			default:
-				logIf("error", "Unknown outbound interface type: %T", outLI)
+				logIf("error", "Unknown outbound interface type: %T", outboundLI)
 				return
 			}
 		default:

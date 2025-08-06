@@ -1,6 +1,9 @@
 package main
 
 import (
+	"encoding/base64"
+	"encoding/binary"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -23,7 +26,8 @@ const (
 )
 
 const (
-	MTU = 1500
+	MTU                     = 1500
+	SRC_IP_PORT_PLACEHOLDER = "--------" // 用于表示源IP和端口在DART报头中的位置
 )
 
 func (s QueueStyle) String() string {
@@ -35,6 +39,37 @@ type ForwardRoutine struct {
 	style QueueStyle
 	ifce  LinkInterface
 	sock  int
+}
+
+// 编码 IPv4 + Port 为 Base64URL 字符串（无填充）
+func EncodeIPv4PortToBase64URL(ip net.IP, port layers.UDPPort) (string, error) {
+	ip4 := ip.To4()
+	if ip4 == nil {
+		return "", errors.New("not a valid IPv4 address")
+	}
+
+	buf := make([]byte, 6)
+	copy(buf[0:4], ip4)                               // 前4字节为IP
+	binary.BigEndian.PutUint16(buf[4:], uint16(port)) // 后2字节为Port
+
+	// Base64URL 编码（无填充）
+	return base64.RawURLEncoding.EncodeToString(buf), nil
+}
+
+// 解码 Base64URL 字符串为 IPv4 + Port
+func DecodeBase64URLToIPv4Port(encoded string) (net.IP, layers.UDPPort, error) {
+	data, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil {
+		return nil, 0, err
+	}
+	if len(data) != 6 {
+		return nil, 0, errors.New("invalid data length")
+	}
+
+	ip := net.IPv4(data[0], data[1], data[2], data[3])
+	port := binary.BigEndian.Uint16(data[4:6])
+
+	return ip, layers.UDPPort(port), nil
 }
 
 func (fr *ForwardRoutine) Run() {
@@ -132,16 +167,14 @@ func (fr *ForwardRoutine) processDownlink_Nat_4_Dart() {
 	}
 }
 
-func trimIpSuffix(s string) string {
-	parts := strings.Split(s, ".")
+func trimIpSuffix(fqdn string) string {
+	parts := strings.Split(fqdn, ".")
 	lastPart := &parts[len(parts)-1]
-	ip := make(net.IP, 4)
-	n, err := fmt.Sscanf(*lastPart, "[%d-%d-%d-%d]", &ip[0], &ip[1], &ip[2], &ip[3])
-	if err == nil && n == 4 {
-		*lastPart = ""
-		return strings.Join(parts, ".")
+	// 如果lastPart是[Base64URL编码的IPv4地址],则返回不包含lastPart的部分
+	if strings.HasPrefix(*lastPart, "[") && strings.HasSuffix(*lastPart, "]") {
+		return strings.Join(parts[:len(parts)-1], ".")
 	}
-	return s
+	return fqdn
 }
 
 type PostTask int
@@ -242,8 +275,6 @@ func (fr *ForwardRoutine) encapsulatePacket(packet *netfilter.NFPacket) PostTask
 	lease, ok := server.leasesByIp[ip.SrcIP.String()]
 	if !ok {
 		// 源主机的IP不是通过DHCP获得的（DHCP/DNS系统中没有此主机的记录），我们用其IP构筑其DART的源地址
-		// 对方如果是直接接入根域的，那么其实用不上这个地址，因为IP层的源地址就足够正确返回报文了
-		// 这是为对方主机位于派生出的子域准备的
 		SrcFqdn = fmt.Sprintf("[%d-%d-%d-%d].%s", ip.SrcIP[0], ip.SrcIP[1], ip.SrcIP[2], ip.SrcIP[3], inLI.Domain)
 	} else {
 		SrcFqdn = lease.FQDN
@@ -254,10 +285,17 @@ func (fr *ForwardRoutine) encapsulatePacket(packet *netfilter.NFPacket) PostTask
 	// 源地址设置为本地域中的主机才能意义
 	if !inLI.RegistedInUplinkDNS {
 		// 如果子域的域名没有在父域的DNS系统中注册过，那么只有一种可能：
-		// 这台设备直接（或者通过NAT）连接到公网（中间没有其他DART网关），那么这时候我们就需要将公网地址嵌入DART的源地址，以便报文接收方知道报文回应给谁
+		// 这台设备直接或者通过NAT连接到公网（中间没有其他DART网关），那么这时候我们就需要将公网地址嵌入DART的源地址，以便报文接收方知道报文回应给谁
 		// 接收方的响应报文在进入根域时DART网关会从目标地址中拆解出IP并填入IP层的目标地址
-		_ip := CONFIG.Uplink.PublicIP()
-		SrcFqdn = fmt.Sprintf("%s[%d-%d-%d-%d]", SrcFqdn, _ip[0], _ip[1], _ip[2], _ip[3])
+		// 因为一个NAT网关之下可能有多个主机访问同一个公网上的DART网关之后的主机，因此仅仅嵌入IP地址是不够的，我们还需要嵌入源端口号
+		// 这样才能确保报文能够正确返回到源主机
+
+		// _ip := CONFIG.Uplink.PublicIP()
+		// SrcFqdn = fmt.Sprintf("%s[%d-%d-%d-%d]", SrcFqdn, _ip[0], _ip[1], _ip[2], _ip[3])
+
+		// 报文穿越NAT网关的时候源端口也会发生变化，因此在发送端嵌入地址和端口是缺乏足够的信息的。我们改为在报文从公网进入DART网关的时候执行这个操作。
+		// 为了避免再次复制报文，我们在DART报头中占位源IP和端口的位置。这个占位同时也指示接收方应当用源地址和端口替代之
+		SrcFqdn = fmt.Sprintf("%s[%s]", SrcFqdn, SRC_IP_PORT_PLACEHOLDER) // 这里的SrcIPPortPlaceHolder是为了在DART报头中占位，表示源IP和端口的位置
 	}
 
 	DstFqdn = strings.TrimSuffix(DstFqdn, ".")
@@ -324,14 +362,24 @@ func (fr *ForwardRoutine) forwardDartPacket(pktStyle string, ip *layers.IPv4, ud
 
 	dstFqdn := string(dart.DstFqdn)
 
-	switch inLI := fr.ifce.Owner.(type) {
+	switch inboundLI := fr.ifce.Owner.(type) {
 	case *DownLinkInterface:
 		// Do nothing
 	case *UpLinkInterface:
-		// Now the dstFqdn may looks like c1.sh.cn.[192-168-2.100]
-		// 如果我们收到这样的报文，则说明我方发送的报文在SrcFqdn中嵌入了IP，对方将其作为DstFqdn回复过来了。我们要先删除这一部分才好判断往哪里转发。
-		if inLI.inRootDomain {
+		if inboundLI.inRootDomain {
+			// Now the dstFqdn may looks like c1.sh.cn.[<Base64URL encoded IPv4 & UDP Port>]
+			// 如果我们收到这样的报文，则说明我方发送的报文在SrcFqdn中嵌入了IP，对方将其作为DstFqdn回复过来了。我们要先删除这一部分才好判断往哪里转发。
 			dstFqdn = trimIpSuffix(dstFqdn)
+
+			// 如果源FQDN中含有占位符，说明是从NAT之后DART网关或主机发出的，我们需要将占位符替换为实际IP和UDP端口
+			if strings.HasSuffix(string(dart.SrcFqdn), "["+SRC_IP_PORT_PLACEHOLDER+"]") {
+				// 如果源FQDN中包含SRC_IP_PORT_PLACEHOLDER，则说明源IP和端口需要替换
+				// 这里的SrcFqdn是DART报头中的源FQDN
+				// 我们将其替换为当前报文的源IP和UDP端口的Base64URL编码格式
+				SrcIPPort, _ := EncodeIPv4PortToBase64URL(ip.SrcIP, udp.SrcPort)
+				dart.SrcFqdn = []byte(strings.Replace(string(dart.SrcFqdn), "["+SRC_IP_PORT_PLACEHOLDER+"]", "["+SrcIPPort+"]", 1))
+			}
+
 		}
 	default:
 		logIf("error", "[%s] Unknown interface type: %T", pktStyle, fr.ifce.Owner)
@@ -350,34 +398,36 @@ func (fr *ForwardRoutine) forwardDartPacket(pktStyle string, ip *layers.IPv4, ud
 	var dstIP net.IP
 	var forwardAsDart bool
 
-	switch outLI := outboundIfce.Owner.(type) {
+	switch outboundLI := outboundIfce.Owner.(type) {
 	case *UpLinkInterface:
 		logIf("debug2", "[%s] Forwarding dart packet to uplink interface %s\n", pktStyle, outboundIfce.Name())
 
 		forwardAsDart = true // 上联口的DART网关总是支持DART协议
 
-		IP, supportDart := outLI.resolveWithCache(dstFqdn)
+		IP, Port, supportDart := outboundLI.resolveWithCache(dstFqdn)
 		if IP == nil {
 			logIf("error", "[%s] Destination %s does not exist, dropping packet", pktStyle, dstFqdn)
 			return DropPacket
 		}
 
 		if !supportDart {
-			// 因为是向上联口转发，目标必须支持DART协议
+			// 因为是向上联口转发，目标必须支持DART协议。对于不支持DART协议的目标主机，我们通过设置iptables规则让OS执行NAT44转换。所以正常情况下不会走到这里
 			logIf("error", "[%s] Destination %s does not support DART, dropping packet", pktStyle, dstFqdn)
 			return DropPacket
 		}
 
 		dstIP = IP
+		udp.DstPort = layers.UDPPort(Port)
+
 		forwardAsDart = true
 		logIf("debug2", "[%s] forwarding DART packet heading %s to %s", pktStyle, dstFqdn, IP)
 
 	case *DownLinkInterface:
 		logIf("debug2", "[%s] Forwarding DART packet to downlink interface %s\n", pktStyle, outboundIfce.Name())
 
-		level1SubDomain, isSubDomain := findSubDomainUnder(dstFqdn, outLI.Domain)
+		level1SubDomain, isSubDomain := findSubDomainUnder(dstFqdn, outboundLI.Domain)
 		if !isSubDomain {
-			logIf("error", "[%s] Destination %s is not in the subdomain %s, dropping packet", pktStyle, dstFqdn, outLI.Domain)
+			logIf("error", "[%s] Destination %s is not in the subdomain %s, dropping packet", pktStyle, dstFqdn, outboundLI.Domain)
 			return DropPacket
 		}
 
@@ -393,7 +443,7 @@ func (fr *ForwardRoutine) forwardDartPacket(pktStyle string, ip *layers.IPv4, ud
 			}
 		} else {
 			// 如果没有找到对应的DHCP租约记录，说明目标主机不是通过DHCP获得的IP地址。我们尝试从名称当中还原IP
-			maybeIPstring := strings.TrimSuffix(dstFqdn, outLI.Domain)
+			maybeIPstring := strings.TrimSuffix(dstFqdn, outboundLI.Domain)
 			ip := make(net.IP, 4)
 			n, err := fmt.Sscanf(maybeIPstring, "[%d-%d-%d-%d].", &ip[0], &ip[1], &ip[2], &ip[3])
 			if err == nil && n == 4 {
@@ -422,6 +472,7 @@ func (fr *ForwardRoutine) forwardDartPacket(pktStyle string, ip *layers.IPv4, ud
 		// 更新 IP 地址
 		ip.SrcIP = outboundIfce.Addr()
 		ip.DstIP = dstIP
+		udp.SrcPort = layers.UDPPort(DARTPort) // 穿越NAT的DART报文源端口会变成随机端口，这里必须改回来
 
 		// 重新构造 UDP 层，为计算校验和准备
 		udp.SetNetworkLayerForChecksum(ip)

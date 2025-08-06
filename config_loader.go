@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/gopacket/layers"
 	"github.com/miekg/dns"
 	"gopkg.in/yaml.v2"
 )
@@ -42,6 +43,7 @@ type LinkInterface struct {
 
 type cachedDnsItem struct {
 	IP       net.IP
+	Port     layers.UDPPort
 	Support  bool
 	LiveTime time.Time
 }
@@ -107,65 +109,76 @@ func (u *UpLinkInterface) lookupNS(domain string) (addrs []net.IP) {
 	return nil
 }
 
-func (u *UpLinkInterface) searchInCache(fqdn string) (ok bool, ip net.IP, supportDart bool) {
+func (u *UpLinkInterface) searchInCache(fqdn string) (ok bool, ip net.IP, port layers.UDPPort, supportDart bool) {
 	u.cacheLock.Lock() // 新增：加锁
 	defer u.cacheLock.Unlock()
 	cachedDns, ok := u.domainCache[fqdn]
 	if ok {
 		if time.Now().Before(cachedDns.LiveTime) {
-			return ok, cachedDns.IP, cachedDns.Support
+			return ok, cachedDns.IP, cachedDns.Port, cachedDns.Support
 		}
 	}
 
 	return // false, nil, false
 }
 
-func (u *UpLinkInterface) addToCache(fqdn string, ip net.IP, supportDart bool) {
+func (u *UpLinkInterface) addToCache(fqdn string, ip net.IP, port layers.UDPPort, supportDart bool) {
 	u.cacheLock.Lock() // 新增：加锁
-	u.domainCache[fqdn] = cachedDnsItem{IP: ip, Support: supportDart, LiveTime: time.Now().Add(time.Hour * 24)}
+	u.domainCache[fqdn] = cachedDnsItem{IP: ip, Port: port, Support: supportDart, LiveTime: time.Now().Add(time.Hour * 24)}
 	u.cacheLock.Unlock() // 新增：解锁
 }
 
-func (u *UpLinkInterface) resolveWithCache(fqdn string) (ip net.IP, supportDart bool) {
+func (u *UpLinkInterface) resolve(fqdn string) (ip net.IP, supportDart bool) {
+	for _, dnsServer := range u.DNSServers {
+		IPAddresses, _supportDart, err := resolveByQuery(fqdn, dnsServer, 0)
+		if err != nil {
+			logIf("error", "Error resolving A record for %s: %v, try next dns server...\n", fqdn, err)
+			continue
+		} else if len(IPAddresses) > 0 {
+			ip = IPAddresses[0]
+			supportDart = _supportDart
+			return ip, supportDart
+		} else {
+			// DNS SERVER返回无错误，但没有A记录
+			logIf("error", "No A records found for %s\n", fqdn)
+			break
+		}
+	}
+	return nil, false
+}
+
+func (u *UpLinkInterface) resolveWithCache(fqdn string) (ip net.IP, port layers.UDPPort, supportDart bool) {
+
 	// 在这里设置一个DNS CACHE。先从CACHE中查询，如果命中，直接返回
-	ok, ip, supportDart := u.searchInCache(fqdn)
+	var ok bool
+	ok, ip, port, supportDart = u.searchInCache(fqdn)
 	if ok {
-		return ip, supportDart
+		return ip, port, supportDart
 	}
 
+	// 如果一台DART节点在根域，并且没有将自己注册到根域的DNS系统，那么为了报文能够返回，它会将自己的公网IP嵌入到DART报头的源地址中
+	// 格式是这样的：c1.sh.cn.[<Base64Url>]，其中Base64Url编码的部分是它的公网IP和UDP端口
+	// 如果本设备的上联口直接接入IPv4的根域，那么我们先看看能否从FQDN中解析出IPv4地址和端口
 	if u.inRootDomain {
-		// 如果一台DART节点在根域，并且没有将自己注册到根域的DNS系统，那么为了报文能够返回，它会将自己的公网IP嵌入到DART报头的源地址中
-		// 格式是这样的：c1.sh.cn.[A-B-C-D]，其中A.B.C.D是它的公网IP
-		// 如果本设备的上联口直接接入IPv4的根域，那么我们先看看能否从FQDN中解析出IPv4地址
 		parts := strings.Split(fqdn, ".")
 		lastPart := parts[len(parts)-1]
-		_ip := make(net.IP, 4)
-		n, err := fmt.Sscanf(lastPart, "[%d-%d-%d-%d]", &_ip[0], &_ip[1], &_ip[2], &_ip[3])
-		if err == nil && n == 4 {
-			ip = _ip
+
+		if strings.HasPrefix(lastPart, "[") && strings.HasSuffix(lastPart, "]") {
+			// 如果最后一部分是 [Base64Url]，则尝试解析它
+			ip, port, _ = DecodeBase64URLToIPv4Port(lastPart[1 : len(lastPart)-1])
 			supportDart = true
 		}
 	}
 
-	if ip == nil { // 如果解析失败，说明fqdn中没有嵌入IP。那就进入正常的DNS解析流程
-		for _, dnsServer := range u.DNSServers {
-			IPAddresses, _supportDart, err := resolveByQuery(fqdn, dnsServer, 0)
-			if err != nil {
-				logIf("error", "Error resolving A record for %s: %v, try next dns server...\n", fqdn, err)
-				continue
-			} else if len(IPAddresses) == 0 {
-				// logIf("error", "No A records found for %s\n", fqdn)
-				return nil, false
-			} else {
-				ip = IPAddresses[0]
-				supportDart = _supportDart
-				break
-			}
-		}
+	// 如果不在根域，或者解析失败（fqdn中没有嵌入IP），那就进入正常的DNS解析流程
+	if ip == nil {
+		ip, supportDart = u.resolve(fqdn)
+		port = DARTPort // 默认端口
 	}
 
+	// 将解析结果加入缓存
 	if ip != nil {
-		u.addToCache(fqdn, ip, supportDart)
+		u.addToCache(fqdn, ip, port, supportDart)
 	}
 
 	return
@@ -183,7 +196,7 @@ func (u *UpLinkInterface) probeLocation(domain string) string {
 		}
 
 		query := "dart-gateway." + domain
-		ip, suppDart := u.resolveWithCache(query)
+		ip, suppDart := u.resolve(query)
 		if ip != nil && suppDart {
 			return domain
 		}
