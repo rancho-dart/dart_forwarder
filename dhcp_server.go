@@ -25,9 +25,9 @@ type DHCPServer struct {
 	headIP        net.IP
 	tailIP        net.IP
 	leaseDuration time.Duration
-	leasesByIp    map[string]leaseInfo // key: IP string
-	leasesByFQDN  map[string]leaseInfo
-	staticLeases  map[string]leaseInfo // key: MAC, value: leaseInfo
+	leasesByIp    map[string]*leaseInfo // key: IP string
+	leasesByFQDN  map[string]*leaseInfo
+	staticLeases  map[string]*leaseInfo // key: MAC, value: leaseInfo
 }
 
 type leaseInfo struct {
@@ -100,17 +100,17 @@ func NewDHCPServer(dlIfce DownLinkInterface) *DHCPServer {
 	// 添加DNS服务器
 	options[dhcp4.OptionDomainNameServer] = dlIfce.ipNet.IP
 
-	var leasesByIp = make(map[string]leaseInfo)
-	var leasesByFQDN = make(map[string]leaseInfo)
+	leasesByIp := make(map[string]*leaseInfo)
+	leasesByFQDN := make(map[string]*leaseInfo)
+	staticLeases := make(map[string]*leaseInfo)
 
 	// 初始化静态租约
-	staticLeases := make(map[string]leaseInfo)
 	for _, binding := range dlIfce.StaticBindings {
 		var fqdn string
 		if binding.FQDN != "" {
 			fqdn = dns.Fqdn(binding.FQDN)
 		}
-		lease := leaseInfo{
+		lease := &leaseInfo{
 			IP:          net.ParseIP(binding.IP).To4(),
 			MAC:         strings.ToLower(binding.MAC),
 			Expiry:      time.Now().Add(24 * time.Hour), // 静态租约默认24小时
@@ -147,20 +147,15 @@ func NewDHCPServer(dlIfce DownLinkInterface) *DHCPServer {
 
 			_, ok := staticLeases[mac] // If the mac is already in static leases, skip it
 			if !ok {
-				leasesByIp[ip] = leaseInfo{
+				lease := &leaseInfo{
 					IP:          net.ParseIP(ip).To4(),
 					MAC:         mac,
 					Expiry:      expiry,
 					DARTVersion: dartVersion,
 					FQDN:        fqdn,
 				}
-				leasesByFQDN[fqdn] = leaseInfo{
-					IP:          net.ParseIP(ip).To4(),
-					MAC:         mac,
-					Expiry:      expiry,
-					DARTVersion: dartVersion,
-					FQDN:        fqdn,
-				}
+				leasesByIp[ip] = lease
+				leasesByFQDN[fqdn] = lease
 			}
 		}
 	}
@@ -310,7 +305,8 @@ func (s *DHCPServer) ServeDHCP(p dhcp4.Packet, msgType dhcp4.MessageType, option
 				lease, ok := s.leasesByFQDN[fqdn] // 看看此FQDN是不是已经分配出去了（有可能不同主机配置了同一个主机名）
 
 				if !ok || lease.MAC == mac { // 如果没分配，或者虽然已分配但MAC地址一致，则创建/更新lease信息
-					s.leasesByIp[requestedIP.String()] = leaseInfo{
+
+					lease := &leaseInfo{
 						IP:          requestedIP,
 						MAC:         mac,
 						Expiry:      time.Now().Add(s.leaseDuration),
@@ -319,14 +315,8 @@ func (s *DHCPServer) ServeDHCP(p dhcp4.Packet, msgType dhcp4.MessageType, option
 						Delegated:   delegated,
 					}
 
-					s.leasesByFQDN[fqdn] = leaseInfo{
-						IP:          requestedIP,
-						MAC:         mac,
-						Expiry:      time.Now().Add(s.leaseDuration),
-						DARTVersion: dartVersion,
-						FQDN:        fqdn,
-						Delegated:   delegated,
-					}
+					s.leasesByIp[requestedIP.String()] = lease
+					s.leasesByFQDN[fqdn] = lease
 
 					// write to db
 					logIf("debug1", "[DHCP REQUEST] mac=%s, ip=%s, dart_version=%d, fqdn=%s, Expiry=%s\n", mac, requestedIP.String(), dartVersion, fqdn, time.Now().Add(s.leaseDuration).Format(time.RFC3339))
@@ -389,7 +379,7 @@ func (s *DHCPServer) findFreeIP(mac string) net.IP {
 
 		// 检查是否已被分配
 		if li, ok := s.leasesByIp[ipStr]; !ok || li.Expiry.Before(now) {
-			s.leasesByIp[ipStr] = leaseInfo{
+			s.leasesByIp[ipStr] = &leaseInfo{
 				MAC:    mac,
 				Expiry: time.Now().Add(s.leaseDuration),
 			}

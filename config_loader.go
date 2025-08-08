@@ -57,6 +57,7 @@ type UpLinkInterface struct {
 	ipNet            net.IPNet
 	defaultGateway   net.IP // 上联口的默认网关
 	inRootDomain     bool
+	behindNatGateway bool
 	domainCache      map[string]cachedDnsItem
 	cacheLock        sync.Mutex // 新增：用于保护 domainCache 的互斥锁
 	ResolvableIP     net.IP
@@ -73,11 +74,13 @@ type DownLinkInterface struct {
 	ipNet               net.IPNet // ipNet.Address 接口的IP同时用作DHCP SERVER/DNS SERVER/DEFAULT GATEWAY
 	RegistedInUplinkDNS bool
 	NAT44enabled        bool
+	// RouterOnAStick      bool
 }
 
 type Config struct {
-	Uplink    UpLinkInterface     `yaml:"uplink"`
-	Downlinks []DownLinkInterface `yaml:"downlinks"`
+	Uplink             UpLinkInterface     `yaml:"uplink"`
+	Downlinks          []DownLinkInterface `yaml:"downlinks"`
+	RouterOnAStickIfce *DownLinkInterface
 }
 
 var CONFIG Config
@@ -161,12 +164,15 @@ func (u *UpLinkInterface) resolveWithCache(fqdn string) (ip net.IP, port layers.
 	// 如果本设备的上联口直接接入IPv4的根域，那么我们先看看能否从FQDN中解析出IPv4地址和端口
 	if u.inRootDomain {
 		parts := strings.Split(fqdn, ".")
-		lastPart := parts[len(parts)-1]
+		lenParts := len(parts)
+		if lenParts >= 2 {
+			lastPart := parts[len(parts)-2] // fqdn经过标准化之后有一个结尾的点，所以这里取倒数第二部分
 
-		if strings.HasPrefix(lastPart, "[") && strings.HasSuffix(lastPart, "]") {
-			// 如果最后一部分是 [Base64Url]，则尝试解析它
-			ip, port, _ = DecodeBase64URLToIPv4Port(lastPart[1 : len(lastPart)-1])
-			supportDart = true
+			if strings.HasPrefix(lastPart, "[") && strings.HasSuffix(lastPart, "]") {
+				// 如果最后一部分是 [Base64Url]，则尝试解析它
+				ip, port, _ = DecodeBase64URLToIPv4Port(lastPart[1 : len(lastPart)-1])
+				supportDart = true
+			}
 		}
 	}
 
@@ -341,10 +347,15 @@ func LoadCONFIG() error {
 	for i := range CONFIG.Downlinks {
 		dl := &CONFIG.Downlinks[i]
 		dl.LinkInterface.Owner = dl
+		if dl.Name == CONFIG.Uplink.Name {
+			// 如果下联口的名称与上联口相同，则表示单臂路由
+			CONFIG.RouterOnAStickIfce = dl
+			logIf("info", "Router on a stick mode enabled. Downlink interface [%s] is the same as uplink interface [%s].", dl.Name, CONFIG.Uplink.Name)
+		}
 
-		// 将接口域名统一为小写
 		dl.Domain = dns.Fqdn(strings.ToLower(dl.Domain))
 
+		// 在父域的DNS中查询下联口的域名的NS的IP。如果是自己的接口地址，或者是自己的公网地址（如果自己在NAT之后，而NAT做了映射），那就说明本DART网关在父域的DNS中注册了
 		nameServers := CONFIG.Uplink.lookupNS(dl.Domain)
 
 		// 我们先看一下返回的名字服务器中有没有上联口地址
@@ -359,13 +370,16 @@ func LoadCONFIG() error {
 			}
 		}
 
-		// 如果没有，那么我们再看一下名字服务器中有没有上联口的公网地址
+		// 如果没有，那么我们再看一下名字服务器中有没有上联口的公网地址。
+		// 因为访问PublicIP会产生探测公网地址的操作，因此我们分两次操作，在接口地址未匹配上时才比较公网地址
 		if !dl.RegistedInUplinkDNS && isPrivateAddr(CONFIG.Uplink.Addr()) {
 			for _, ns := range nameServers {
 				if ns.Equal(CONFIG.Uplink.PublicIP()) {
 					// 本地的域名已经成功在父域DNS服务器上解析
 					dl.RegistedInUplinkDNS = true
 					CONFIG.Uplink.ResolvableIP = ns
+					CONFIG.Uplink.behindNatGateway = true
+
 					logIf("info", "PASS: domain [%s] configured on interface [%s] has been delegated to [%s]",
 						dl.Domain, dl.Name, CONFIG.Uplink.PublicIP())
 					logIf("info", "Caution: you should map udp port %s:%d => %s:%d & %s:%d => %s:%d on NAT gateway",
@@ -397,6 +411,21 @@ func LoadCONFIG() error {
 			}
 		}
 
+		// 检查是否满足开始单臂路由的条件
+		if CONFIG.RouterOnAStickIfce != nil {
+			if !(CONFIG.Uplink.inRootDomain && CONFIG.Uplink.behindNatGateway) {
+				return fmt.Errorf("router-on-a-stick can be enabled only when this DART gateway is behind a NAT gateway which connects to Internet")
+			}
+
+			if len(CONFIG.Downlinks) > 1 {
+				return fmt.Errorf("router-on-a-stick can be enabled only when there is only one downlink interface")
+			}
+
+			logIf("info", "Router-on-a-stick is enabled on interface %s.", CONFIG.RouterOnAStickIfce.Name)
+		}
+
+		// 下面检查配置的DHCP地址池
+		// 先取得接口的IP地址（可能有多个）
 		ipNets, err := findIpNetsOfIfce(dl.Name)
 		if err != nil {
 			return err
@@ -421,10 +450,10 @@ func LoadCONFIG() error {
 			// 标记是否找到合适的接口IP
 			foundValidIP := false
 
-			for _, addr := range ipNets {
+			for i := range ipNets {
 				// 判断接口IP与地址池是否在同一网段
-				if addr.Contains(headIP) && addr.Contains(tailIP) {
-					dl.ipNet = ipNets[0]
+				if ipNets[i].Contains(headIP) && ipNets[i].Contains(tailIP) {
+					dl.ipNet = ipNets[i]
 					foundValidIP = true
 					break
 				}

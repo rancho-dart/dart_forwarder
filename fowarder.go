@@ -360,9 +360,30 @@ func (fr *ForwardRoutine) forwardDartPacket(pktStyle string, ip *layers.IPv4, ud
 
 	logIf("debug2", "[%s] Received dart packet: %s -> %s\n", pktStyle, dart.SrcFqdn, dart.DstFqdn)
 
+	// DART网关可能存在于网络中的几种位置：
+	// 1. DART网关直接接入Internet公网。此时上联口、下联口各有其口；
+	// 2. DART网关通过NAT网关接入Internet公网
+	//   2.1 DART网关上联口、下联口是不同的接口
+	//   2.2 DART网关上联口、下联口是相同的接口，网关工作在单臂路由模式。本原型系统假设只有位于直接接入Internet公网的NAT网关之下的DART网关才会启用单臂路由。单臂路由模式下，如果报文源地址与接口同一网段，则视为来自下联口，否则视为来自上联口
+	// 3. DART网关位于另一台DART网关的子域中
+
+	// 因为单臂路由的存在，不能简单地通过报文进入的接口判断到底来自上联口还是下联口。因此我们要根据源IP进行判断
+	var inboundIfce *LinkInterface
+
+	if CONFIG.RouterOnAStickIfce == nil {
+		// 不是单臂路由，那么直接获取报文进入的接口
+		inboundIfce = &fr.ifce
+	} else if CONFIG.RouterOnAStickIfce.ipNet.Contains(ip.SrcIP) {
+		// 单臂路由。如果报文源地址与接口同网段，则来自下联口
+		inboundIfce = &CONFIG.RouterOnAStickIfce.LinkInterface
+	} else {
+		// 单臂路由。否则，来自上联口
+		inboundIfce = &CONFIG.Uplink.LinkInterface
+	}
+
 	dstFqdn := string(dart.DstFqdn)
 
-	switch inboundLI := fr.ifce.Owner.(type) {
+	switch inboundLI := inboundIfce.Owner.(type) {
 	case *DownLinkInterface:
 		// Do nothing
 	case *UpLinkInterface:
@@ -619,7 +640,7 @@ func EnableNAT44(rm *RuleManager) {
 
 	outIfce := CONFIG.Uplink.Name
 	for I, DownLink := range CONFIG.Downlinks {
-		if DownLink.Name == CONFIG.Uplink.Name {
+		if CONFIG.RouterOnAStickIfce != nil && DownLink.Name == CONFIG.RouterOnAStickIfce.Name {
 			logIf("warn", "Router-on-a-stick is configured for interface %s, thus NAT44 is not enabled.", DownLink.Name)
 			continue
 		}
@@ -663,7 +684,7 @@ func startForwardModule() {
 		}
 		queueNo++
 
-		if DownLink.Name == CONFIG.Uplink.Name {
+		if CONFIG.RouterOnAStickIfce != nil && DownLink.Name == CONFIG.RouterOnAStickIfce.Name {
 			logIf("warn", "Router-on-a-stick is configured for interface %s, so DART packets forwarding is unnecessary to enable again.", DownLink.Name)
 			continue
 		}

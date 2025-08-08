@@ -171,24 +171,19 @@ func findSubDomainUnder(domain, base string) (level1SubDomain string, isSubDomai
 	return _domain[lastDot+1:], true
 }
 
-func (s *DNSServer) getForwardInfo(fqdn string) (*LinkInterface, leaseInfo) {
-	var lease leaseInfo
-	outboundIfce := s.getOutboundIfce(dns.Fqdn(fqdn))
+func (s *DNSServer) getForwardInfo(fqdn string) (outboundIfce *LinkInterface, lease *leaseInfo) {
+	outboundIfce = s.getOutboundIfce(dns.Fqdn(fqdn))
 
 	if outboundIfce != nil {
 		dhcpServer, ok := DHCP_SERVERS[outboundIfce.Name()]
 		if ok {
 			subDomain, ok := findSubDomainUnder(fqdn, dhcpServer.dlIfce.Domain)
 			if ok {
-				lease, ok = dhcpServer.leasesByFQDN[subDomain]
-				if ok {
-					return outboundIfce, lease
-				}
+				lease = dhcpServer.leasesByFQDN[subDomain]
 			}
 		}
-		return outboundIfce, lease // 如果没有找到子域名的绑定记录，那么返回空的 leaseInfo
 	}
-	return nil, lease // 如果没有找到匹配的接口，那么返回 nil 和空的 leaseInfo（理论上不会，因为上联口是默认接口，除非没有配置上联口）
+	return
 }
 
 // NewDNSServer 创建一个新的 DNS Server 实例
@@ -598,21 +593,24 @@ func (s *DNSServer) getInboundInfo(w dns.ResponseWriter) (clientIP net.IP, inbou
 	IPstr = IPstr[:strings.LastIndex(IPstr, ":")] // 去掉端口号
 	clientIP = net.ParseIP(IPstr).To4()
 
-	for i, ifce := range CONFIG.Downlinks {
-		if ifce.ipNet.Contains(clientIP) {
-			inboundIfce = &CONFIG.Downlinks[i].LinkInterface
-			break
+	if CONFIG.RouterOnAStickIfce == nil {
+		for i, ifce := range CONFIG.Downlinks {
+			if ifce.ipNet.Contains(clientIP) {
+				inboundIfce = &CONFIG.Downlinks[i].LinkInterface
+				return
+			}
 		}
-	}
-
-	if inboundIfce != nil {
-		// 单臂路由场景：如果inboundIfce是Uplink且clientIP等于Uplink的默认网关，则实际来自Uplink
-		if inboundIfce.Name() == CONFIG.Uplink.Name && clientIP.Equal(CONFIG.Uplink.defaultGateway) {
-			return clientIP, &CONFIG.Uplink.LinkInterface
+		inboundIfce = &CONFIG.Uplink.LinkInterface
+		return
+	} else {
+		// 单臂路由
+		if CONFIG.RouterOnAStickIfce.ipNet.Contains(clientIP) {
+			inboundIfce = &CONFIG.RouterOnAStickIfce.LinkInterface
+			return
 		}
-		return clientIP, inboundIfce
+		inboundIfce = &CONFIG.Uplink.LinkInterface
+		return
 	}
-	return clientIP, &CONFIG.Uplink.LinkInterface
 }
 
 // getOutboundIfce
@@ -752,13 +750,13 @@ func (s *DNSServer) getDhcpLeaseByFqdn(ifName, fqdn string) *leaseInfo {
 		for i := range dhcpServer.staticLeases {
 			if dhcpServer.staticLeases[i].FQDN == fqdn {
 				lease := dhcpServer.staticLeases[i]
-				return &lease
+				return lease
 			}
 		}
 
 		lease, ok := dhcpServer.leasesByFQDN[fqdn]
 		if ok {
-			return &lease
+			return lease
 		}
 	}
 	return nil
@@ -771,7 +769,7 @@ func (s *DNSServer) getDhcpLeasedIp(ifName, domain string) (ip net.IP, supportDa
 		var staticLease *leaseInfo
 		for _, lease := range dhcpServer.staticLeases {
 			if lease.FQDN == domain {
-				staticLease = &lease
+				staticLease = lease
 				break
 			}
 		}
