@@ -350,7 +350,6 @@ func LoadCONFIG() error {
 		if dl.Name == CONFIG.Uplink.Name {
 			// 如果下联口的名称与上联口相同，则表示单臂路由
 			CONFIG.RouterOnAStickIfce = dl
-			logIf("info", "Router on a stick mode enabled. Downlink interface [%s] is the same as uplink interface [%s].", dl.Name, CONFIG.Uplink.Name)
 		}
 
 		dl.Domain = dns.Fqdn(strings.ToLower(dl.Domain))
@@ -418,7 +417,7 @@ func LoadCONFIG() error {
 			}
 		}
 
-		// 检查是否满足开始单臂路由的条件
+		// 检查是否满足开启单臂路由的条件
 		if CONFIG.RouterOnAStickIfce != nil {
 			if !(CONFIG.Uplink.inRootDomain && CONFIG.Uplink.behindNatGateway) {
 				return fmt.Errorf("router-on-a-stick can be enabled only when this DART gateway is behind a NAT gateway which connects to Internet")
