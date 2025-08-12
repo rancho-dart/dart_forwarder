@@ -519,7 +519,7 @@ func probePublicIP(websites []string, dnsServer string) (net.IP, error) {
 			continue
 		}
 
-		// ✅ 模拟 curl 的请求头
+		// 模拟 curl 的请求头
 		req.Header.Set("User-Agent", "curl/7.85.0")
 		req.Header.Set("Accept", "*/*")
 

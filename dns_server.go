@@ -175,7 +175,7 @@ func (s *DNSServer) getForwardInfo(fqdn string) (outboundIfce *LinkInterface, le
 	outboundIfce = s.getOutboundIfce(dns.Fqdn(fqdn))
 
 	if outboundIfce != nil {
-		dhcpServer, ok := DHCP_SERVERS[outboundIfce.Name()]
+		dhcpServer, ok := DHCP_SERVERS[outboundIfce.Name()] // Note that DHCP Servers are only enabled on DownLink interfaces.
 		if ok {
 			subDomain, ok := findSubDomainUnder(fqdn, dhcpServer.dlIfce.Domain)
 			if ok {
@@ -442,6 +442,11 @@ func (s *DNSServer) handleQueryInsideSubDomain(w dns.ResponseWriter, r *dns.Msg,
 
 	// 判断被查询方是否支持DART
 	_, queriedLease := s.getForwardInfo(queriedDomain)
+	if queriedLease == nil {
+		s.respondWithNxdomain(w, r)
+		return
+	}
+
 	queriedSupportDart := queriedLease.DARTVersion > 0
 	queriedIsGateway := false
 	if !queriedSupportDart && queriedLease.Delegated {
@@ -593,6 +598,10 @@ func (s *DNSServer) getInboundInfo(w dns.ResponseWriter) (clientIP net.IP, inbou
 	IPstr = IPstr[:strings.LastIndex(IPstr, ":")] // 去掉端口号
 	clientIP = net.ParseIP(IPstr).To4()
 
+	// github.com/miekg/dns不会提供查询报文进入的网络接口，因此我们在这里进行判断
+	// 这里判断规则还是基于这样的认定：所有进入下联口的查询报文都与接口处于同一网段
+	// 如果严格按照DART协议的定义，每个DART域享有完整的IPv4地址空间，是不能通过源地址来判断进入的接口的。
+	// 作为原型系统，我们简单点
 	if CONFIG.RouterOnAStickIfce == nil {
 		for i, ifce := range CONFIG.Downlinks {
 			if ifce.ipNet.Contains(clientIP) {
