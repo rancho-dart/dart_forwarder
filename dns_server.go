@@ -129,11 +129,18 @@ func resolveNsRecord(domain, dnsServer string) (addrs []net.IP, err error) {
 	}
 
 	// 提取胶水记录中的 IP 地址
-	for _, rr := range resp.Extra {
-		if a, ok := rr.(*dns.A); ok {
-			for _, ns := range nsRecords {
-				if a.Hdr.Name == ns {
-					addrs = append(addrs, a.A)
+	if len(resp.Extra) == 0 {
+		for _, ns := range nsRecords {
+			nsips, _, _ := resolveByQuery(ns, dnsServer, 0) // 如果没有额外的记录，尝试通过查询域名来获取 IP 地址
+			addrs = append(addrs, nsips...)
+		}
+	} else {
+		for _, rr := range resp.Extra {
+			if a, ok := rr.(*dns.A); ok {
+				for _, ns := range nsRecords {
+					if a.Hdr.Name == ns {
+						addrs = append(addrs, a.A)
+					}
 				}
 			}
 		}
