@@ -201,7 +201,7 @@ func (u *UpLinkInterface) probeLocation(domain string) string {
 			break // 没有更多的父域了
 		}
 
-		query := "dart-gateway." + domain
+		query := "dart-gateway." + domain //探测方式：解析dart-gateway.domain，如果失败则domain退至上一级域直到成功或者退至根域
 		ip, suppDart := u.resolve(query)
 		if ip != nil && suppDart {
 			return domain
@@ -378,7 +378,6 @@ func LoadCONFIG() error {
 					// 本地的域名已经成功在父域DNS服务器上解析
 					dl.RegistedInUplinkDNS = true
 					CONFIG.Uplink.ResolvableIP = ns
-					CONFIG.Uplink.behindNatGateway = true
 
 					logIf("info", "PASS: domain [%s] configured on interface [%s] has been delegated to [%s]",
 						dl.Domain, dl.Name, CONFIG.Uplink.PublicIP())
@@ -389,11 +388,19 @@ func LoadCONFIG() error {
 			}
 		}
 
+		// 探测上联口所处的DART域
 		DartDomain := CONFIG.Uplink.probeLocation(dl.Domain)
 
 		if DartDomain == "" {
-			logIf("info", "The uplink interface of this device is connected to root domain of Internet IPv4.")
+			// 上联口接入根域
+			logIf("info", "The uplink interface of this device is connected to root domain of Internet.")
 			CONFIG.Uplink.inRootDomain = true
+
+			if isPrivateAddr(CONFIG.Uplink.Addr()) {
+				// 上联口是私网地址，说明它在NAT之后
+				CONFIG.Uplink.behindNatGateway = true
+				logIf("info", "This DART gateway is behind a NAT gateway which connects to Internet")
+			}
 
 			if !dl.RegistedInUplinkDNS {
 				publicIP := CONFIG.Uplink.PublicIP()
