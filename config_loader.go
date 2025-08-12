@@ -381,7 +381,7 @@ func LoadCONFIG() error {
 					logIf("info", "PASS: domain [%s] configured on interface [%s] has been delegated to [%s]",
 						dl.Domain, dl.Name, CONFIG.Uplink.PublicIP())
 					logIf("info", "Caution: you should map udp port %s:%d => %s:%d & %s:%d => %s:%d on NAT gateway",
-						CONFIG.Uplink.PublicIP(), DNSPort, &CONFIG.Uplink.ipNet, DNSPort, CONFIG.Uplink.PublicIP(), DARTPort, &CONFIG.Uplink.ipNet, DARTPort)
+						CONFIG.Uplink.PublicIP(), DNSPort, &CONFIG.Uplink.ipNet.IP, DNSPort, CONFIG.Uplink.PublicIP(), DARTPort, &CONFIG.Uplink.ipNet.IP, DARTPort)
 					break
 				}
 			}
