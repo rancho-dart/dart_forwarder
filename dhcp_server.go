@@ -68,11 +68,12 @@ func startDHCPServerModule() {
 			}
 
 			go func(pc net.PacketConn, server *DHCPServer) {
-				logIf("info", "DHCP server started on interface %s...\n", server.dlIfce.Name)
+				logIf(Info, "DHCP server started on interface %s...\n", server.dlIfce.Name)
 				log.Fatal(dhcp4.Serve(pc, server))
 			}(pc, server)
+
 		} else {
-			logIf("warn", "No valid address pool configured for interface %s, DHCP server isn't started on it.", iface.Name)
+			logIf(Warn, "No valid address pool configured for interface %s, DHCP server isn't started on it.", iface.Name)
 		}
 	}
 
@@ -136,12 +137,12 @@ func NewDHCPServer(dlIfce DownLinkInterface) *DHCPServer {
 			var dartVersion int
 			err := rows.Scan(&mac, &ip, &fqdn, &dartVersion, &expiryStr)
 			if err != nil {
-				logIf("error", "Error scanning row: %v\n", err)
+				logIf(Error, "Error scanning row: %v\n", err)
 				continue
 			}
 			expiry, err := time.Parse(time.RFC3339, expiryStr)
 			if err != nil {
-				logIf("error", "Error parsing expiry time: %v\n", err)
+				logIf(Error, "Error parsing expiry time: %v\n", err)
 				continue
 			}
 
@@ -236,7 +237,7 @@ func (s *DHCPServer) ServeDHCP(p dhcp4.Packet, msgType dhcp4.MessageType, option
 	case dhcp4.Discover:
 		// 检查静态绑定
 		if lease, ok := s.staticLeases[mac]; ok {
-			logIf("debug1", "[DHCP DISCOVER] static leased ip allocated: %s for mac %s", lease.IP, mac)
+			logIf(Debug1, "[DHCP DISCOVER] static leased ip allocated: %s for mac %s", lease.IP, mac)
 			return dhcp4.ReplyPacket(p, dhcp4.Offer, s.dlIfce.ipNet.IP, lease.IP, s.leaseDuration,
 				s.options.SelectOrderOrAll(options[dhcp4.OptionParameterRequestList]))
 		}
@@ -244,11 +245,11 @@ func (s *DHCPServer) ServeDHCP(p dhcp4.Packet, msgType dhcp4.MessageType, option
 		// 动态分配IP
 		ip := s.findFreeIP(mac)
 		if ip == nil {
-			logIf("debug1", "[DHCP DISCOVER] DHCP ip pool exhausted, no ip allocated for mac %s", mac)
+			logIf(Debug1, "[DHCP DISCOVER] DHCP ip pool exhausted, no ip allocated for mac %s", mac)
 			return nil
 		}
 
-		logIf("debug1", "[DHCP DISCOVER] Dynamic ip %s allocated for mac %s", ip, mac)
+		logIf(Debug1, "[DHCP DISCOVER] Dynamic ip %s allocated for mac %s", ip, mac)
 		return dhcp4.ReplyPacket(p, dhcp4.Offer, s.dlIfce.ipNet.IP, ip, s.leaseDuration,
 			s.options.SelectOrderOrAll(options[dhcp4.OptionParameterRequestList]))
 	case dhcp4.Request:
@@ -319,11 +320,11 @@ func (s *DHCPServer) ServeDHCP(p dhcp4.Packet, msgType dhcp4.MessageType, option
 					s.leasesByFQDN[fqdn] = lease
 
 					// write to db
-					logIf("debug1", "[DHCP REQUEST] mac=%s, ip=%s, dart_version=%d, fqdn=%s, Expiry=%s\n", mac, requestedIP.String(), dartVersion, fqdn, time.Now().Add(s.leaseDuration).Format(time.RFC3339))
+					logIf(Debug1, "[DHCP REQUEST] mac=%s, ip=%s, dart_version=%d, fqdn=%s, Expiry=%s\n", mac, requestedIP.String(), dartVersion, fqdn, time.Now().Add(s.leaseDuration).Format(time.RFC3339))
 					_, err := DB.Exec("INSERT OR REPLACE INTO dhcp_leases (mac_address, ip_address, dart_version, fqdn, Expiry) VALUES (?, ?, ?, ?, ?)",
 						mac, requestedIP.String(), dartVersion, fqdn, time.Now().Add(s.leaseDuration).Format(time.RFC3339))
 					if err != nil {
-						logIf("error", "Error writing to SQLite database: %v\n", err)
+						logIf(Error, "Error writing to SQLite database: %v\n", err)
 					}
 					return dhcp4.ReplyPacket(p, dhcp4.ACK, s.dlIfce.ipNet.IP, requestedIP, s.leaseDuration,
 						s.options.SelectOrderOrAll(options[dhcp4.OptionParameterRequestList]))
@@ -347,10 +348,10 @@ func (s *DHCPServer) ServeDHCP(p dhcp4.Packet, msgType dhcp4.MessageType, option
 			}
 		}
 
-		logIf("debug1", "[DHCP RELEASE] mac %s, ip %s", mac, p.CIAddr())
+		logIf(Debug1, "[DHCP RELEASE] mac %s, ip %s", mac, p.CIAddr())
 		_, err := DB.Exec("DELETE FROM dhcp_leases WHERE mac_address = ?", mac)
 		if err != nil {
-			logIf("error", "Failed to delete lease: %v", err)
+			logIf(Error, "Failed to delete lease: %v", err)
 		}
 	}
 	return nil

@@ -78,6 +78,7 @@ type DownLinkInterface struct {
 }
 
 type Config struct {
+	LogLevel           string              `yaml:"log_level"`
 	Uplink             UpLinkInterface     `yaml:"uplink"`
 	Downlinks          []DownLinkInterface `yaml:"downlinks"`
 	RouterOnAStickIfce *DownLinkInterface
@@ -99,14 +100,15 @@ func (u *UpLinkInterface) lookupNS(domain string) (addrs []net.IP) {
 	for _, dnsServer := range u.DNSServers {
 		nameServers, err := resolveNsRecord(domain, dnsServer)
 		if err != nil {
-			logIf("error", "Error resolving NS record for %s: %v, try next dns server...\n", domain, err)
+			logIf(Error, "Error resolving NS record for %s: %v, try next dns server...\n", domain, err)
 			continue
 		} else if len(nameServers) == 0 {
-			logIf("error", "No NS records found for %s, try next dns server...\n", domain)
+			logIf(Error, "No NS records found for %s, try next dns server...\n", domain)
 			return nil
 		} else {
 			return nameServers
 		}
+
 	}
 	// logIf("error", "No NS records found for [%s]", domain)
 	return nil
@@ -135,7 +137,7 @@ func (u *UpLinkInterface) resolve(fqdn string) (ip net.IP, supportDart bool) {
 	for _, dnsServer := range u.DNSServers {
 		IPAddresses, _supportDart, err := resolveByQuery(fqdn, dnsServer, 0)
 		if err != nil {
-			logIf("error", "Error resolving A record for %s: %v, try next dns server...\n", fqdn, err)
+			logIf(Error, "Error resolving A record for %s: %v, try next dns server...\n", fqdn, err)
 			continue
 		} else if len(IPAddresses) > 0 {
 			ip = IPAddresses[0]
@@ -143,9 +145,10 @@ func (u *UpLinkInterface) resolve(fqdn string) (ip net.IP, supportDart bool) {
 			return ip, supportDart
 		} else {
 			// DNS SERVER返回无错误，但没有A记录
-			logIf("error", "No A records found for %s\n", fqdn)
+			logIf(Error, "No A records found for %s\n", fqdn)
 			break
 		}
+
 	}
 	return nil, false
 }
@@ -311,8 +314,17 @@ func findIpNetsOfIfce(ifName string) ([]net.IPNet, error) {
 	return filteredIpNet, nil
 }
 
+var LOG_LEVEL LogLevel = Info // 默认日志级别
+
+// 控制日志条目输出的辅助函数
+var logIf = func(level LogLevel, format string, v ...interface{}) {
+	if level <= LOG_LEVEL { // 输出FORWARDER的报文级别的调试信息
+		log.Printf("["+logLevelToString[level]+"] "+format, v...)
+	}
+}
+
 // LoadCONFIG 加载配置文件并返回配置信息。
-func LoadCONFIG() error {
+func LoadCONFIG(loglevelFormCmdLine *string) error {
 	configFile, err := os.ReadFile(ConfigFile)
 	if err != nil {
 		return fmt.Errorf("failed to read config file: %v", err)
@@ -320,6 +332,19 @@ func LoadCONFIG() error {
 
 	if err := yaml.Unmarshal(configFile, &CONFIG); err != nil {
 		return fmt.Errorf("failed to unmarshal config: %v", err)
+	}
+
+	// 处理日志级别设置
+	_loglevel, ok := StringToLogLevel[*loglevelFormCmdLine] // 优先使用命令行参数
+	if !ok {
+		// 如果命令行参数无效或未提供，则使用配置文件中的日志级别
+		_loglevel, ok = StringToLogLevel[CONFIG.LogLevel]
+	}
+
+	if ok {
+		// 设置全局日志级别
+		// 如果命令行或者配置文件中提供了有效的日志级别，则使用它。否则保持默认的Info级别。
+		LOG_LEVEL = _loglevel
 	}
 
 	// Verify configurations of uplink interface
@@ -336,14 +361,14 @@ func LoadCONFIG() error {
 		return fmt.Errorf("failed to find default gateway for interface %s: %v", CONFIG.Uplink.Name, err)
 	}
 	CONFIG.Uplink.defaultGateway = defaultGateway
-	logIf("info", "Uplink interface: %s, ip: %s, mask: %s, default gateway: %s", CONFIG.Uplink.Name, CONFIG.Uplink.ipNet.IP, CONFIG.Uplink.ipNet.Mask, CONFIG.Uplink.defaultGateway)
+	logIf(Info, "Uplink interface: %s, ip: %s, mask: %s, default gateway: %s", CONFIG.Uplink.Name, CONFIG.Uplink.ipNet.IP, CONFIG.Uplink.ipNet.Mask, CONFIG.Uplink.defaultGateway)
 
 	if len(CONFIG.Uplink.DNSServers) == 0 {
 		return fmt.Errorf("Uplink.DNSServers cannot be empty")
 	}
 
 	// Verify configurations of Downlinks interfaces
-	logIf("info", "Locating device position: am I delegated to any domain? .. ")
+	logIf(Info, "Locating device position: am I delegated to any domain? .. ")
 	for i := range CONFIG.Downlinks {
 		dl := &CONFIG.Downlinks[i]
 		dl.LinkInterface.Owner = dl
@@ -363,7 +388,7 @@ func LoadCONFIG() error {
 				// 本地的域名已经成功在父域DNS服务器上解析
 				dl.RegistedInUplinkDNS = true
 				CONFIG.Uplink.ResolvableIP = ns
-				logIf("info", "PASS: domain [%s] on interface [%s] has been delegated to [%s] by dns server(s) on uplink interface",
+				logIf(Info, "PASS: domain [%s] on interface [%s] has been delegated to [%s] by dns server(s) on uplink interface",
 					dl.Domain, dl.Name, CONFIG.Uplink.ipNet.IP)
 				break
 			}
@@ -378,9 +403,9 @@ func LoadCONFIG() error {
 					dl.RegistedInUplinkDNS = true
 					CONFIG.Uplink.ResolvableIP = ns
 
-					logIf("info", "PASS: domain [%s] configured on interface [%s] has been delegated to [%s]",
+					logIf(Info, "PASS: domain [%s] configured on interface [%s] has been delegated to [%s]",
 						dl.Domain, dl.Name, CONFIG.Uplink.PublicIP())
-					logIf("info", "Caution: you should map udp port %s:%d => %s:%d & %s:%d => %s:%d on NAT gateway",
+					logIf(Info, "Caution: you should map udp port %s:%d => %s:%d & %s:%d => %s:%d on NAT gateway",
 						CONFIG.Uplink.PublicIP(), DNSPort, &CONFIG.Uplink.ipNet.IP, DNSPort, CONFIG.Uplink.PublicIP(), DARTPort, &CONFIG.Uplink.ipNet.IP, DARTPort)
 					break
 				}
@@ -392,25 +417,25 @@ func LoadCONFIG() error {
 
 		if DartDomain == "" {
 			// 上联口接入根域
-			logIf("info", "The uplink interface of this device is connected to root domain of Internet.")
+			logIf(Info, "The uplink interface of this device is connected to root domain of Internet.")
 			CONFIG.Uplink.inRootDomain = true
 
 			if isPrivateAddr(CONFIG.Uplink.Addr()) {
 				// 上联口是私网地址，说明它在NAT之后
 				CONFIG.Uplink.behindNatGateway = true
-				logIf("info", "This DART gateway is behind a NAT gateway which connects to Internet")
+				logIf(Info, "This DART gateway is behind a NAT gateway which connects to Internet")
 			}
 
 			if !dl.RegistedInUplinkDNS {
 				publicIP := CONFIG.Uplink.PublicIP()
 				if publicIP != nil {
-					logIf("warn", "Warning: domain [%s] configured on interface [%s] isn't delegated by dns server(s) on uplink interface. Will use public IP [%s] as DART source address", dl.Domain, dl.Name, publicIP)
+					logIf(Warn, "Warning: domain [%s] configured on interface [%s] isn't delegated by dns server(s) on uplink interface. Will use public IP [%s] as DART source address", dl.Domain, dl.Name, publicIP)
 				} else {
 					log.Fatalf("Domain [%s] configured on interface [%s] isn't delegated by dns server(s) on uplink interface, and the public IP of uplink interface is not available. Please check your configuration.", dl.Domain, dl.Name)
 				}
 			}
 		} else {
-			logIf("info", "The uplink interface of this device is connected to DART domain: [%s]", DartDomain)
+			logIf(Info, "The uplink interface of this device is connected to DART domain: [%s]", DartDomain)
 
 			if !dl.RegistedInUplinkDNS {
 				log.Fatalf("Sub-DART-domain not allowed in undelegated DART domain. Exit.")
@@ -427,7 +452,7 @@ func LoadCONFIG() error {
 				return fmt.Errorf("router-on-a-stick can be enabled only when there is only one downlink interface")
 			}
 
-			logIf("info", "Router-on-a-stick is enabled on interface %s.", CONFIG.RouterOnAStickIfce.Name)
+			logIf(Info, "Router-on-a-stick is enabled on interface %s.", CONFIG.RouterOnAStickIfce.Name)
 		}
 
 		// 下面检查配置的DHCP地址池
@@ -521,7 +546,7 @@ func probePublicIP(websites []string, dnsServer string) (net.IP, error) {
 	for _, website := range websites {
 		req, err := http.NewRequest("GET", website, nil)
 		if err != nil {
-			logIf("error", "failed to create request:", err)
+			logIf(Error, "failed to create request:", err)
 			continue
 		}
 
@@ -531,14 +556,13 @@ func probePublicIP(websites []string, dnsServer string) (net.IP, error) {
 
 		resp, err := client.Do(req)
 		if err != nil {
-			logIf("error", "request failed:", err)
+			logIf(Error, "request failed:", err)
 			continue
 		}
-		defer resp.Body.Close()
 
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
-			logIf("error", "failed to read response:", err)
+			logIf(Error, "failed to read response:", err)
 			continue
 		}
 
@@ -546,8 +570,9 @@ func probePublicIP(websites []string, dnsServer string) (net.IP, error) {
 		if ip := net.ParseIP(ipStr); ip != nil {
 			return ip.To4(), nil
 		} else {
-			logIf("error", "invalid IP string from %s: %q", website, ipStr)
+			logIf(Error, "invalid IP string from %s: %q", website, ipStr)
 		}
+
 	}
 
 	return nil, fmt.Errorf("no valid public IP found")

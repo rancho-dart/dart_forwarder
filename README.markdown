@@ -55,11 +55,11 @@ Currently, the program is only tested on Ubuntu 24.04.
          ```
       2) The system has a default route. Otherwise some packets will be dropped instead of being forwarded.
 
-   - If system is configured as Router-on-stick, you should edit /etc/ufw/sysctl.conf to disable ICMP redirect:
+   - If system is configured as Router-on-stick, you should edit /etc/sysctl.conf to disable ICMP redirect:
       ```bash
       net.ipv4.conf.all.accept_redirects=0
       net.ipv4.conf.all.send_redirects=0
-      net.ipv4.conf.eth0.send_redirects = 0       # Change 'eth0' to your network interface name.
+      net.ipv4.conf.eth0.send_redirects=0       # Change 'eth0' to your network interface name.
       ```
    - Make it to take effect:
       ```bash

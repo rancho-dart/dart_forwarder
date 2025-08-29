@@ -42,21 +42,21 @@ func (rm *RuleManager) AddRule(table, chain string, rule []string) error {
 		if err := rm.ipt.Append(table, chain, rule...); err != nil {
 			return fmt.Errorf("append rule: %v", err)
 		}
-		logIf("debug1", "  Rule added: %s %s %v", table, chain, rule)
+		logIf(Debug1, "  Rule added: %s %s %v", table, chain, rule)
 		rm.rules = append(rm.rules, IptablesRule{table, chain, rule})
 	} else {
-		logIf("warn", "  Rule already exists: %s %s %v", table, chain, rule)
+		logIf(Warn, "  Rule already exists: %s %s %v", table, chain, rule)
 	}
 	return nil
 }
 
 func (rm *RuleManager) Cleanup() {
-	logIf("info", "Cleaning up iptables rules...")
+	logIf(Info, "Cleaning up iptables rules...")
 	for _, r := range rm.rules {
 		if err := rm.ipt.Delete(r.Table, r.Chain, r.Rule...); err != nil {
-			logIf("error", "Failed to delete rule: %s %s %v, error: %v", r.Table, r.Chain, r.Rule, err)
+			logIf(Error, "Failed to delete rule: %s %s %v, error: %v", r.Table, r.Chain, r.Rule, err)
 		} else {
-			logIf("debug1", "  Deleted rule: %s %s %v", r.Table, r.Chain, r.Rule)
+			logIf(Debug1, "  Deleted rule: %s %s %v", r.Table, r.Chain, r.Rule)
 		}
 	}
 }
@@ -64,13 +64,13 @@ func (rm *RuleManager) Cleanup() {
 func (rm *RuleManager) CleanupOnSignal(wg *sync.WaitGroup) {
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, syscall.SIGINT, syscall.SIGTERM)
-	logIf("debug1", "Signal handler registered for rules cleanup on exit")
+	logIf(Debug1, "Signal handler registered for rules cleanup on exit")
 
 	go func() {
 		<-c
 		log.Println()
 		rm.Cleanup()
-		logIf("info", "RuleManager cleanup done.")
+		logIf(Info, "RuleManager cleanup done.")
 		wg.Done()
 	}()
 }

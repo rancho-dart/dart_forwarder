@@ -11,7 +11,7 @@
             "env": {
                 "GOPATH": "${workspaceFolder}/go"
             },
-            "args": ["-loglevel", "debug2"],
+            // "args": ["-loglevel", "debug2"],
             "postDebugTask": "cleanup-iptables",
             "showLog": false
         }

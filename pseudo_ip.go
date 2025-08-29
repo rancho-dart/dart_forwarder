@@ -1,6 +1,6 @@
 package main
 
-// 当一台不支持Dart协议的主机查询位于其他域的主机域名时，按照DART协议的规则，返回DART网关的IP地址。这样，下一步它发送报文时会被发送到Dart网关
+// 当一台不支持DART协议的主机查询位于其他域的主机域名时，按照DART协议的规则，返回DART网关的IP地址。这样，下一步它发送报文时会被发送到Dart网关
 // 但是因为它不支持DART协议，它发送的是普通的IP报文，DART网关就不知道应该向何处转发
 // 我们在此处为每一个被查询的域名生成一个唯一的伪地址返回给查询方。这个伪地址满足如下条件：
 // 1. 伪地址不会出现在真实的网络中（不会被分配给真实的网络主机或设备）
@@ -58,8 +58,8 @@ func NewPseudoIpPool(ttl time.Duration, cidr string) *PseudoIpPool {
 		ipMap:     make(map[uint32]*PseudoIpEntry),
 	}
 
-	logIf("info", "Pseudo IP pool initialized with CIDR %s, head: %s, tail: %s", cidr, uint32ToIP(head), uint32ToIP(tail))
-	logIf("info", "Pseudo IP pool will clean up expired entries every day at 3 AM")
+	logIf(Info, "Pseudo IP pool initialized with CIDR %s, head: %s, tail: %s", cidr, uint32ToIP(head), uint32ToIP(tail))
+	logIf(Info, "Pseudo IP pool will clean up expired entries every day at 3 AM")
 
 	// 设置定时任务，每天凌晨3点执行CleanupExpired
 	go func() {
@@ -92,7 +92,7 @@ func (p *PseudoIpPool) FindOrAllocate(domain string, realIP net.IP, udpport uint
 		entry.udpPort = udpport
 
 		// 返回已有的伪地址
-		logIf("debug2", "Reusing pseudo address for %s: %s", domain, entry.PseudoIP)
+		logIf(Debug2, "Reusing pseudo address for %s: %s", domain, entry.PseudoIP)
 		return entry.PseudoIP
 	}
 
@@ -114,7 +114,7 @@ func (p *PseudoIpPool) FindOrAllocate(domain string, realIP net.IP, udpport uint
 				p.ipMap[ipInt] = entry
 				p.next = ipInt + 1
 
-				logIf("debug2", "Allocated new pseudo address for %s: %s", domain, pseudoIP)
+				logIf(Debug2, "Allocated new pseudo address for %s: %s", domain, pseudoIP)
 				return pseudoIP
 			}
 		}
@@ -154,7 +154,7 @@ func (p *PseudoIpPool) CleanupExpired() {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
 
-	logIf("info", "Cleaning up expired pseudo addresses...")
+	logIf(Info, "Cleaning up expired pseudo addresses...")
 	now := time.Now()
 	for ipInt, entry := range p.ipMap {
 		if now.Sub(entry.LastUsedAt) > p.ttl {
@@ -212,7 +212,7 @@ func (p *PseudoIpPool) SaveAllPseudoAddresses() error {
 func (p *PseudoIpPool) loadPseudoAddresses() {
 	rows, err := DB.Query("SELECT Domain, PseudoIP, RealIP, udpPort, LastUsedAt FROM pseudo_addresses")
 	if err != nil {
-		logIf("error", "Error loading pseudo addresses: %v\n", err)
+		logIf(Error, "Error loading pseudo addresses: %v\n", err)
 		return
 	}
 	defer rows.Close()
@@ -223,26 +223,26 @@ func (p *PseudoIpPool) loadPseudoAddresses() {
 	for rows.Next() {
 		var domain, pseudoIPStr, realIPStr, udpPortStr, lastUsedAt string
 		if err := rows.Scan(&domain, &pseudoIPStr, &realIPStr, &udpPortStr, &lastUsedAt); err != nil {
-			logIf("error", "Error scanning pseudo address row: %v\n", err)
+			logIf(Error, "Error scanning pseudo address row: %v\n", err)
 			continue
 		}
 
 		pseudoIP := net.ParseIP(pseudoIPStr)
 		if pseudoIP == nil {
-			logIf("error", "Invalid pseudo IP address: %s", pseudoIPStr)
+			logIf(Error, "Invalid pseudo IP address: %s", pseudoIPStr)
 			continue
 		}
 
 		ipInt := ipToUint32(pseudoIP.To4())
 		if p.head > ipInt || ipInt > p.tail {
-			// logIf("info", "Pseudo IP %s not in pool", pseudoIPStr)
+			// logIf(Info, "Pseudo IP %s not in pool", pseudoIPStr)
 			continue
 		}
 
 		// 解析realIP
 		realIP := net.ParseIP(realIPStr)
 		if realIP == nil && realIPStr != "" {
-			logIf("error", "Invalid real IP address: %s", realIPStr)
+			logIf(Error, "Invalid real IP address: %s", realIPStr)
 			continue
 		}
 
@@ -251,7 +251,7 @@ func (p *PseudoIpPool) loadPseudoAddresses() {
 		if udpPortStr != "" {
 			port64, err := strconv.ParseUint(udpPortStr, 10, 16)
 			if err != nil {
-				logIf("error", "Invalid udpPort value: %s", udpPortStr)
+				logIf(Error, "Invalid udpPort value: %s", udpPortStr)
 				continue
 			}
 			port = uint16(port64)
@@ -260,7 +260,7 @@ func (p *PseudoIpPool) loadPseudoAddresses() {
 		// 解析时间
 		usedAt, err := time.Parse(time.RFC3339, lastUsedAt)
 		if err != nil {
-			logIf("error", "Invalid timestamp format: %s", lastUsedAt)
+			logIf(Error, "Invalid timestamp format: %s", lastUsedAt)
 			usedAt = time.Now() // 默认使用当前时间
 		}
 
@@ -275,7 +275,7 @@ func (p *PseudoIpPool) loadPseudoAddresses() {
 		p.ipMap[ipInt] = entry
 	}
 
-	logIf("debug1", "Loaded %d pseudo addresses from database", len(p.domainMap))
+	logIf(Debug1, "Loaded %d pseudo addresses from database", len(p.domainMap))
 }
 
 // 注册信号处理，退出前保存伪地址池
@@ -283,15 +283,15 @@ func (p *PseudoIpPool) loadPseudoAddresses() {
 func (p *PseudoIpPool) BackupOnSignal(wg *sync.WaitGroup) {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-	logIf("debug1", "Signal handler registered for saving pseudo addresses on exit")
+	logIf(Debug1, "Signal handler registered for saving pseudo addresses on exit")
 
 	go func() {
 		<-sigChan
-		logIf("info", "Saving pseudo addresses...")
+		logIf(Info, "Saving pseudo addresses...")
 		if err := p.SaveAllPseudoAddresses(); err != nil {
-			logIf("error", "Failed to save pseudo addresses: %v", err)
+			logIf(Error, "Failed to save pseudo addresses: %v", err)
 		} else {
-			logIf("info", "Pseudo addresses saved successfully.")
+			logIf(Info, "Pseudo addresses saved successfully.")
 		}
 		wg.Done()
 	}()

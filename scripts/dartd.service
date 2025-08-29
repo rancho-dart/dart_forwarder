@@ -8,6 +8,8 @@ Restart=always
 User=root
 Group=root
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+StandardOutput=file:/var/log/dartd.log
+StandardError=file:/var/log/dartd.log
 
 [Install]
 WantedBy=multi-user.target

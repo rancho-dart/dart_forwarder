@@ -16,27 +16,39 @@ const (
 	SMALL_VERSION = 0
 )
 
-var WG sync.WaitGroup
+type LogLevel int
 
-// 控制日志条目输出的辅助函数
-var loglevel *string
-var logIf = func(level string, format string, v ...interface{}) {
-	if *loglevel == "none" {
-		return
-	}
+const (
+	None   LogLevel = iota // 0
+	Error                  // 1
+	Warn                   // 2
+	Info                   // 3
+	Debug1                 // 4
+	Debug2                 // 5
+)
 
-	if *loglevel == "error" && level == "error" ||
-		*loglevel == "warn" && (level == "warn" || level == "error") ||
-		*loglevel == "info" && (level == "warn" || level == "error" || level == "info") ||
-		*loglevel == "debug1" && (level == "debug1" || level == "warn" || level == "error" || level == "info") || // 输出DNS/DHCP的报文级别的调试信息
-		*loglevel == "debug2" { // 输出FORWARDER的报文级别的调试信息
-		log.Printf("["+level+"] "+format, v...)
-	}
+var logLevelToString = map[LogLevel]string{
+	None:   "none",
+	Error:  "error",
+	Warn:   "warn",
+	Info:   "info",
+	Debug1: "debug1",
+	Debug2: "debug2",
 }
+var StringToLogLevel = map[string]LogLevel{
+	"none":   None,
+	"error":  Error,
+	"warn":   Warn,
+	"info":   Info,
+	"debug1": Debug1,
+	"debug2": Debug2,
+}
+
+var WG sync.WaitGroup
 
 func main() {
 	// 添加命令行参数解析逻辑
-	loglevel = flag.String("loglevel", "none", "Set log level (none, error, warn, info, debug1, debug2)")
+	loglevel := flag.String("loglevel", "", "Set log level (none, error, warn, info, debug1, debug2)")
 	flag.Parse()
 
 	// 新增：处理 -h 参数
@@ -48,9 +60,9 @@ func main() {
 		os.Exit(0)
 	}
 
-	logIf("info", "DART daemon v%d.%d starting...", BIG_VERSION, SMALL_VERSION)
+	logIf(Info, "DART daemon v%d.%d starting...", BIG_VERSION, SMALL_VERSION)
 	// 初始化配置
-	err := LoadCONFIG()
+	err := LoadCONFIG(loglevel)
 	if err != nil {
 		log.Fatalf("Error loading config: %v", err)
 	}

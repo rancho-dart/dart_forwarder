@@ -77,15 +77,15 @@ func (fr *ForwardRoutine) Run() {
 
 	switch fr.ifce.Owner.(type) {
 	case *UpLinkInterface:
-		logIf("info", "Uplink input processing started")
+		logIf(Info, "Uplink input processing started")
 		fr.processUplink_Nat_and_Forward()
 	case *DownLinkInterface:
 		switch fr.style {
 		case Input:
-			logIf("info", "Downlink DART FORWARD processing started")
+			logIf(Info, "Downlink DART FORWARD processing started")
 			fr.processDownlink_DartForward()
 		case Forward:
-			logIf("info", "Downlink NAT-DART-4 processing started")
+			logIf(Info, "Downlink NAT-DART-4 processing started")
 			fr.processDownlink_Nat_4_Dart()
 		}
 	}
@@ -93,7 +93,7 @@ func (fr *ForwardRoutine) Run() {
 
 func (fr *ForwardRoutine) SendPacket(ifce *LinkInterface, DstIP net.IP, packet []byte) error {
 	// Send packet out from interface ifce. packet shoud start from ip header
-	logIf("debug2", "Send packet out of %s to %s\n", ifce.Name(), DstIP)
+	logIf(Debug2, "Send packet out of %s to %s\n", ifce.Name(), DstIP)
 
 	// hex_dump(packet)
 
@@ -143,7 +143,7 @@ func (fr *ForwardRoutine) handleExceededMTU(suggestedMTU int, ipOfLongPkt *layer
 		return err
 	}
 
-	logIf("warn", "[Downlink NAT-DART-4] ICMP 'packet too big' sent to sender %s, suggest MTU %d", ipOfLongPkt.SrcIP.String(), suggestedMTU)
+	logIf(Warn, "[Downlink NAT-DART-4] ICMP 'packet too big' sent to sender %s, suggest MTU %d", ipOfLongPkt.SrcIP.String(), suggestedMTU)
 	return nil
 }
 
@@ -161,7 +161,7 @@ func (fr *ForwardRoutine) processDownlink_Nat_4_Dart() {
 		case AcceptPacket:
 			packet.SetVerdict(netfilter.NF_ACCEPT)
 		default:
-			logIf("error", "[Downlink NAT-DART-4] Unknown post task: %v", postTask)
+			logIf(Error, "[Downlink NAT-DART-4] Unknown post task: %v", postTask)
 			packet.SetVerdict(netfilter.NF_ACCEPT) // 默认放行
 		}
 	}
@@ -191,14 +191,14 @@ func (fr *ForwardRoutine) forwardPacket(pktStyle string, packet *netfilter.NFPac
 	if ipLayer != nil {
 		ip, ok := ipLayer.(*layers.IPv4)
 		if ok {
-			logIf("debug2", "[%s] Received packet: %s -> %s\n", pktStyle, ip.SrcIP, ip.DstIP)
+			logIf(Debug2, "[%s] Received packet: %s -> %s\n", pktStyle, ip.SrcIP, ip.DstIP)
 
 			if ip.Protocol == layers.IPProtocolUDP {
 				udpLayer := packet.Packet.Layer(layers.LayerTypeUDP)
 				if udpLayer != nil {
 					udp, ok := udpLayer.(*layers.UDP)
 					if ok {
-						logIf("debug2", "[%s] Received udp packet: %s -> %s\n", pktStyle, udp.SrcPort, udp.DstPort)
+						logIf(Debug2, "[%s] Received udp packet: %s -> %s\n", pktStyle, udp.SrcPort, udp.DstPort)
 						if udp.DstPort == DARTPort || udp.SrcPort >= 1024 {
 							dartLayer := packet.Packet.Layer(LayerTypeDART)
 							if dartLayer != nil {
@@ -220,7 +220,7 @@ func (fr *ForwardRoutine) forwardPacket(pktStyle string, packet *netfilter.NFPac
 	case AcceptPacket:
 		packet.SetVerdict(netfilter.NF_ACCEPT)
 	default:
-		logIf("error", "[%s] Unknown post task: %v", pktStyle, postTask)
+		logIf(Error, "[%s] Unknown post task: %v", pktStyle, postTask)
 		packet.SetVerdict(netfilter.NF_ACCEPT) // 默认放行
 	}
 }
@@ -236,7 +236,7 @@ func (fr *ForwardRoutine) encapsulatePacket(packet *netfilter.NFPacket) PostTask
 		return AcceptPacket // 如果不是IPv4层，直接放行报文
 	}
 
-	logIf("debug2", "[Downlink NAT-DART-4] Received packet: %s -> %s\n", ip.SrcIP, ip.DstIP)
+	logIf(Debug2, "[Downlink NAT-DART-4] Received packet: %s -> %s\n", ip.SrcIP, ip.DstIP)
 	if !PSEUDO_POOL.isPseudoIP(ip.DstIP) {
 		return AcceptPacket // 如果目标IP不是伪地址，直接放行报文
 	}
@@ -246,14 +246,14 @@ func (fr *ForwardRoutine) encapsulatePacket(packet *netfilter.NFPacket) PostTask
 	// 所以如果表中能查到，目标域名和其在上联口所在域中的IP是都可以直接得到
 	DstFqdn, DstIP, DstUdpPort, ok := PSEUDO_POOL.Lookup(ip.DstIP)
 	if !ok {
-		logIf("error", "[Downlink NAT-DART-4] DstIP %s not found in pseudo ip pool\n", ip.DstIP)
+		logIf(Error, "[Downlink NAT-DART-4] DstIP %s not found in pseudo ip pool\n", ip.DstIP)
 		return DropPacket
 	}
 
 	// 根据目标 FQDN 找出应该转发的端口
 	outLI := DNS_SERVER.getOutboundIfce(DstFqdn)
 	if outLI == nil {
-		logIf("error", "[Downlink NAT-DART-4] No route to forward packet to %s \n", DstFqdn)
+		logIf(Error, "[Downlink NAT-DART-4] No route to forward packet to %s \n", DstFqdn)
 		return DropPacket
 	}
 
@@ -261,13 +261,13 @@ func (fr *ForwardRoutine) encapsulatePacket(packet *netfilter.NFPacket) PostTask
 	inLI, ok := fr.ifce.Owner.(*DownLinkInterface)
 	if !ok {
 		// 除非设置错了队列，否则只会在下联口收到报文
-		logIf("error", "[Downlink NAT-DART-4] Packet enters from non-downlink interface\n")
+		logIf(Error, "[Downlink NAT-DART-4] Packet enters from non-downlink interface\n")
 		return AcceptPacket
 	}
 
 	server, ok := DHCP_SERVERS[inLI.Name]
 	if !ok || server == nil {
-		logIf("error", "[Downlink NAT-DART-4] No DHCP server running on interface %s\n", inLI.Name)
+		logIf(Error, "[Downlink NAT-DART-4] No DHCP server running on interface %s\n", inLI.Name)
 		return DropPacket // 如果没有DHCP服务器，无法获取源FQDN
 	}
 
@@ -331,7 +331,7 @@ func (fr *ForwardRoutine) encapsulatePacket(packet *netfilter.NFPacket) PostTask
 	err := gopacket.SerializeLayers(buffer, opts, &newIp, udp, dart, gopacket.Payload(dart.Payload))
 
 	if err != nil {
-		logIf("error", "[Downlink NAT-DART-4] Failed to serialize packet: %v", err)
+		logIf(Error, "[Downlink NAT-DART-4] Failed to serialize packet: %v", err)
 		return DropPacket
 	}
 
@@ -341,13 +341,13 @@ func (fr *ForwardRoutine) encapsulatePacket(packet *netfilter.NFPacket) PostTask
 		suggestedMTU := MTU - int(dart.HeaderLen()+8) // UDP头长度为8字节
 		err := fr.handleExceededMTU(suggestedMTU, ip)
 		if err != nil {
-			logIf("error", "[Downlink NAT-DART-4] Failed to handle exceeded MTU: %v", err)
+			logIf(Error, "[Downlink NAT-DART-4] Failed to handle exceeded MTU: %v", err)
 		}
 		return DropPacket // 丢弃超长包
 	}
 
 	if err := fr.SendPacket(outLI, newIp.DstIP, buffer.Bytes()); err != nil {
-		logIf("error", "[Downlink NAT-DART-4] Failed to send packet: %v", err)
+		logIf(Error, "[Downlink NAT-DART-4] Failed to send packet: %v", err)
 	}
 
 	return DropPacket
@@ -358,7 +358,7 @@ func (fr *ForwardRoutine) forwardDartPacket(pktStyle string, ip *layers.IPv4, ud
 	// 如果支持，那么保持DART报头不变，IP报头中的源地址换成本机转发接口IP，目标地址换成本地子域中的IP
 	// 如果不支持，那么删除DART报头，查找DART源地址对应的伪地址（如不存在就分配）并作为IP报头源地址，目标地址换成本地子域中的IP
 
-	logIf("debug2", "[%s] Received dart packet: %s -> %s\n", pktStyle, dart.SrcFqdn, dart.DstFqdn)
+	logIf(Debug2, "[%s] Received dart packet: %s -> %s\n", pktStyle, dart.SrcFqdn, dart.DstFqdn)
 
 	// DART网关可能存在于网络中的几种位置：
 	// 1. DART网关直接接入Internet公网。此时上联口、下联口各有其口；
@@ -403,7 +403,7 @@ func (fr *ForwardRoutine) forwardDartPacket(pktStyle string, ip *layers.IPv4, ud
 
 		}
 	default:
-		logIf("error", "[%s] Unknown interface type: %T", pktStyle, fr.ifce.Owner)
+		logIf(Error, "[%s] Unknown interface type: %T", pktStyle, fr.ifce.Owner)
 		return DropPacket
 	}
 
@@ -421,19 +421,19 @@ func (fr *ForwardRoutine) forwardDartPacket(pktStyle string, ip *layers.IPv4, ud
 
 	switch outboundLI := outboundIfce.Owner.(type) {
 	case *UpLinkInterface:
-		logIf("debug2", "[%s] Forwarding dart packet to uplink interface %s\n", pktStyle, outboundIfce.Name())
+		logIf(Debug2, "[%s] Forwarding dart packet to uplink interface %s\n", pktStyle, outboundIfce.Name())
 
 		forwardAsDart = true // 上联口的DART网关总是支持DART协议
 
 		IP, Port, supportDart := outboundLI.resolveWithCache(dstFqdn)
 		if IP == nil {
-			logIf("error", "[%s] Destination %s does not exist, dropping packet", pktStyle, dstFqdn)
+			logIf(Error, "[%s] Destination %s does not exist, dropping packet", pktStyle, dstFqdn)
 			return DropPacket
 		}
 
 		if !supportDart {
 			// 因为是向上联口转发，目标必须支持DART协议。对于不支持DART协议的目标主机，我们通过设置iptables规则让OS执行NAT44转换。所以正常情况下不会走到这里
-			logIf("error", "[%s] Destination %s does not support DART, dropping packet", pktStyle, dstFqdn)
+			logIf(Error, "[%s] Destination %s does not support DART, dropping packet", pktStyle, dstFqdn)
 			return DropPacket
 		}
 
@@ -441,14 +441,14 @@ func (fr *ForwardRoutine) forwardDartPacket(pktStyle string, ip *layers.IPv4, ud
 		udp.DstPort = layers.UDPPort(Port)
 
 		forwardAsDart = true
-		logIf("debug2", "[%s] forwarding DART packet heading %s to %s", pktStyle, dstFqdn, IP)
+		logIf(Debug2, "[%s] forwarding DART packet heading %s to %s", pktStyle, dstFqdn, IP)
 
 	case *DownLinkInterface:
-		logIf("debug2", "[%s] Forwarding DART packet to downlink interface %s\n", pktStyle, outboundIfce.Name())
+		logIf(Debug2, "[%s] Forwarding DART packet to downlink interface %s\n", pktStyle, outboundIfce.Name())
 
 		level1SubDomain, isSubDomain := findSubDomainUnder(dstFqdn, outboundLI.Domain)
 		if !isSubDomain {
-			logIf("error", "[%s] Destination %s is not in the subdomain %s, dropping packet", pktStyle, dstFqdn, outboundLI.Domain)
+			logIf(Error, "[%s] Destination %s is not in the subdomain %s, dropping packet", pktStyle, dstFqdn, outboundLI.Domain)
 			return DropPacket
 		}
 
@@ -470,12 +470,12 @@ func (fr *ForwardRoutine) forwardDartPacket(pktStyle string, ip *layers.IPv4, ud
 			if err == nil && n == 4 {
 				dstIP = ip
 			} else {
-				logIf("error", "[%s] Destination %s does not exist, dropping packet", pktStyle, dstFqdn)
+				logIf(Error, "[%s] Destination %s does not exist, dropping packet", pktStyle, dstFqdn)
 				return DropPacket
 			}
 		}
 	default:
-		logIf("error", "unknown outbound interface type: %v", outboundIfce)
+		logIf(Error, "unknown outbound interface type: %v", outboundIfce)
 		return DropPacket
 	}
 
@@ -502,7 +502,7 @@ func (fr *ForwardRoutine) forwardDartPacket(pktStyle string, ip *layers.IPv4, ud
 		err = gopacket.SerializeLayers(buff, opts,
 			ip, udp, dart, gopacket.Payload(dart.Payload))
 
-		logIf("debug2", "[%s] Forward packet from %s(%s) to %s(%s)", pktStyle, dart.SrcFqdn, ip.SrcIP, dstFqdn, dstIP)
+		logIf(Debug2, "[%s] Forward packet from %s(%s) to %s(%s)", pktStyle, dart.SrcFqdn, ip.SrcIP, dstFqdn, dstIP)
 
 	} else { // Convert to plain IPv4 packet and forward
 		pktStyle = "NAT-DART-4"
@@ -541,11 +541,11 @@ func (fr *ForwardRoutine) forwardDartPacket(pktStyle string, ip *layers.IPv4, ud
 			err = fmt.Errorf("[%s] Unsupported protocol in dart payload", pktStyle)
 		}
 
-		logIf("debug2", "[%s] Forward packet to %s", pktStyle, dstIP)
+		logIf(Debug2, "[%s] Forward packet to %s", pktStyle, dstIP)
 	}
 
 	if err != nil {
-		logIf("error", "[%s] Failed to serialize packet: %v", pktStyle, err)
+		logIf(Error, "[%s] Failed to serialize packet: %v", pktStyle, err)
 		return DropPacket
 	}
 
@@ -553,7 +553,7 @@ func (fr *ForwardRoutine) forwardDartPacket(pktStyle string, ip *layers.IPv4, ud
 
 	// 从 outIfce 指定的端口发出报文
 	if err := fr.SendPacket(outboundIfce, dstIP, buff.Bytes()); err != nil {
-		logIf("error", "[%s] Failed to send packet: %v", pktStyle, err)
+		logIf(Error, "[%s] Failed to send packet: %v", pktStyle, err)
 	}
 
 	// 报文已经从另一个端口转发了，当前报文直接 Drop
@@ -641,7 +641,7 @@ func EnableNAT44(rm *RuleManager) {
 	outIfce := CONFIG.Uplink.Name
 	for I, DownLink := range CONFIG.Downlinks {
 		if CONFIG.RouterOnAStickIfce != nil && DownLink.Name == CONFIG.RouterOnAStickIfce.Name {
-			logIf("warn", "Router-on-a-stick is configured for interface %s, thus NAT44 is not enabled.", DownLink.Name)
+			logIf(Warn, "Router-on-a-stick is configured for interface %s, thus NAT44 is not enabled.", DownLink.Name)
 			continue
 		}
 		// 检查下联口的地址是否是私网地址
@@ -653,7 +653,7 @@ func EnableNAT44(rm *RuleManager) {
 			rm.AddRule("filter", "FORWARD", []string{"-i", DownLink.Name, "-o", outIfce, "-s", private_network, "!", "-d", PSEUDO_IP_POOL, "-m", "conntrack", "--ctstate", "NEW,ESTABLISHED,RELATED", "-j", "ACCEPT"})
 			rm.AddRule("filter", "FORWARD", []string{"-o", DownLink.Name, "-i", outIfce, "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"})
 
-			logIf("info", "Since interface %s has private address, NAT44 is enabled on it.", DownLink.Name)
+			logIf(Info, "Since interface %s has private address, NAT44 is enabled on it.", DownLink.Name)
 			CONFIG.Downlinks[I].NAT44enabled = true
 		}
 	}
@@ -664,7 +664,7 @@ func startForwardModule() {
 	rm := NewRuleManager()
 	go rm.CleanupOnSignal(&WG)
 
-	logIf("info", "Creating queues & iptable rules to capture packets...")
+	logIf(Info, "Creating queues & iptable rules to capture packets...")
 
 	EnableNAT44(rm)
 
@@ -685,7 +685,7 @@ func startForwardModule() {
 		queueNo++
 
 		if CONFIG.RouterOnAStickIfce != nil && DownLink.Name == CONFIG.RouterOnAStickIfce.Name {
-			logIf("warn", "Router-on-a-stick is configured for interface %s, so DART packets forwarding is unnecessary to enable again.", DownLink.Name)
+			logIf(Warn, "Router-on-a-stick is configured for interface %s, so DART packets forwarding is unnecessary to enable again.", DownLink.Name)
 			continue
 		}
 
@@ -696,7 +696,7 @@ func startForwardModule() {
 		queueNo++
 	}
 
-	logIf("info", "Forward module started successfully on NFQUEUE...")
+	logIf(Info, "Forward module started successfully on NFQUEUE...")
 
 	select {}
 }
