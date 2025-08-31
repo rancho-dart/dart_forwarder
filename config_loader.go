@@ -98,19 +98,45 @@ func (u *UpLinkInterface) PublicIP() net.IP {
 
 func (u *UpLinkInterface) lookupNS(domain string) (addrs []net.IP) {
 	for _, dnsServer := range u.DNSServers {
-		nameServers, err := resolveNsRecord(domain, dnsServer)
+		nameServers, err := resolveNsRecord(domain, dnsServer, true)
 		if err != nil {
-			logIf(Error, "Error resolving NS record for %s: %v, try next dns server...\n", domain, err)
+			logIf(Warn, "Error resolving NS record for %s: %v, try next dns server...\n", domain, err)
 			continue
 		} else if len(nameServers) == 0 {
-			logIf(Error, "No NS records found for %s, try next dns server...\n", domain)
-			return nil
+			break // DNS SERVER返回无错误，但没有NS记录
 		} else {
 			return nameServers
 		}
-
 	}
-	// logIf("error", "No NS records found for [%s]", domain)
+
+	logIf(Error, "No NS records found for [%s]", domain)
+	return nil
+}
+
+func (u *UpLinkInterface) lookupNSonInitialization(domain string) (addrs []net.IP) {
+	// 在程序的初始化阶段会查询本地域名服务器的NS记录，但因为此时还没有启动上联口的DNS SERVER，因此会得不到正确的响应
+	// 因此我们在此先查询父域的NS记录，再根据NS记录查询NS的IP记录，再向该NS查询本地域名服务器的NS记录（以非递归方式）
+	// 这样就能得到正确的结果
+	parentDomain := getParentDomain(domain)
+	parentNSs := u.lookupNS(parentDomain)
+	if len(parentNSs) == 0 {
+		logIf(Error, "No NS records found for parent domain [%s] of [%s]", parentDomain, domain)
+		return nil
+	}
+
+	// 现在我们有了父域的NS的IP地址列表，可以向这些NS查询本地域名服务器的NS记录（以非递归方式）
+	for _, parentNS := range parentNSs {
+		nameServers, err := resolveNsRecord(domain, parentNS.String(), false)
+		if err != nil {
+			logIf(Warn, "Error resolving NS record for %s from parent NS %s: %v, try next parent NS...\n", domain, parentNS, err)
+			continue
+		} else if len(nameServers) == 0 {
+			break // DNS SERVER返回无错误，但没有NS记录
+		} else {
+			return nameServers
+		}
+	}
+
 	return nil
 }
 
@@ -145,7 +171,7 @@ func (u *UpLinkInterface) resolve(fqdn string) (ip net.IP, supportDart bool) {
 			return ip, supportDart
 		} else {
 			// DNS SERVER返回无错误，但没有A记录
-			logIf(Error, "No A records found for %s\n", fqdn)
+			logIf(Info, "No A records found for %s\n", fqdn)
 			break
 		}
 
@@ -380,7 +406,7 @@ func LoadCONFIG(loglevelFormCmdLine *string) error {
 		dl.Domain = dns.Fqdn(strings.ToLower(dl.Domain))
 
 		// 在父域的DNS中查询下联口的域名的NS的IP。如果是自己的接口地址，或者是自己的公网地址（如果自己在NAT之后，而NAT做了映射），那就说明本DART网关在父域的DNS中注册了
-		nameServers := CONFIG.Uplink.lookupNS(dl.Domain)
+		nameServers := CONFIG.Uplink.lookupNSonInitialization(dl.Domain)
 
 		// 我们先看一下返回的名字服务器中有没有上联口地址
 		for _, ns := range nameServers {

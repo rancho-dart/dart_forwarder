@@ -685,7 +685,7 @@ func startForwardModule() {
 		queueNo++
 
 		if CONFIG.RouterOnAStickIfce != nil && DownLink.Name == CONFIG.RouterOnAStickIfce.Name {
-			logIf(Warn, "Router-on-a-stick is configured for interface %s, so DART packets forwarding is unnecessary to enable again.", DownLink.Name)
+			logIf(Warn, "Router-on-a-stick is configured for interface %s, so DART packets forwarding is unnecessary to be enabled again.", DownLink.Name)
 			continue
 		}
 

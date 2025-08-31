@@ -103,13 +103,13 @@ func resolveByQuery(domain, dnsServer string, depth int) (addrs []net.IP, suppor
 	return nil, false, nil
 }
 
-func resolveNsRecord(domain, dnsServer string) (addrs []net.IP, err error) {
+func resolveNsRecord(domain, dnsServer string, recursion bool) (addrs []net.IP, err error) {
 	c := new(dns.Client)
 	c.Timeout = 3 * time.Second
 
 	m := new(dns.Msg)
 	m.SetQuestion(dns.Fqdn(domain), dns.TypeNS)
-	m.RecursionDesired = true
+	m.RecursionDesired = recursion
 
 	resp, _, err := c.Exchange(m, dnsServer+":53")
 	if err != nil {
@@ -124,6 +124,13 @@ func resolveNsRecord(domain, dnsServer string) (addrs []net.IP, err error) {
 	var nsRecords []string
 	for _, ans := range resp.Answer {
 		if ns, ok := ans.(*dns.NS); ok {
+			nsRecords = append(nsRecords, ns.Ns)
+		}
+	}
+
+	for _, ns := range resp.Ns {
+		// ns = strings.TrimSuffix(ns, ".") // 去掉末尾的点
+		if ns, ok := ns.(*dns.NS); ok {
 			nsRecords = append(nsRecords, ns.Ns)
 		}
 	}
@@ -642,12 +649,20 @@ func (s *DNSServer) getOutboundIfce(domain string) *LinkInterface {
 }
 
 func getParentDomain(domain string) string {
+	var parentDomain string
+
 	firstDot := strings.Index(domain, ".")
 	if firstDot == -1 {
-		return ""
+		parentDomain = ""
 	} else {
-		return domain[firstDot+1:]
+		parentDomain = domain[firstDot+1:]
 	}
+
+	if parentDomain == "" {
+		parentDomain = "."
+	}
+
+	return parentDomain
 }
 
 func (s *DNSServer) respondWithPseudoIp(w dns.ResponseWriter, r *dns.Msg, domain, baseDomain string, ip net.IP) {
