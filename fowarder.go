@@ -298,7 +298,7 @@ func (fr *ForwardRoutine) encapsulatePacket(packet *netfilter.NFPacket) PostTask
 		SrcFqdn = fmt.Sprintf("%s[%s]", SrcFqdn, SRC_IP_PORT_PLACEHOLDER) // 这里的SrcIPPortPlaceHolder是为了在DART报头中占位，表示源IP和端口的位置
 	}
 
-	DstFqdn = strings.TrimSuffix(DstFqdn, ".")
+	// DstFqdn = strings.TrimSuffix(DstFqdn, ".")
 
 	dart := &DART{
 		Version:    1,
@@ -349,6 +349,7 @@ func (fr *ForwardRoutine) encapsulatePacket(packet *netfilter.NFPacket) PostTask
 	if err := fr.SendPacket(outLI, newIp.DstIP, buffer.Bytes()); err != nil {
 		logIf(Error, "[Downlink NAT-DART-4] Failed to send packet: %v", err)
 	}
+	logIf(Debug2, "[Downlink NAT-DART-4] Forward packet from %s(%s) to %s(%s), length %d", dart.SrcFqdn, ip.SrcIP, DstFqdn, newIp.DstIP, packetLen)
 
 	return DropPacket
 }
@@ -520,6 +521,28 @@ func (fr *ForwardRoutine) forwardDartPacket(pktStyle string, ip *layers.IPv4, ud
 		case layers.IPProtocolTCP:
 			if tcpLayer := packetData.Layer(layers.LayerTypeTCP); tcpLayer != nil {
 				tcp := tcpLayer.(*layers.TCP)
+				// 检查TCP报文，如果是SYN，我们修改其中的MSS选项，使其应答报文不会太大
+				if tcp.SYN {
+					// 修改MSS选项
+					var newOptions []layers.TCPOption
+					for _, opt := range tcp.Options {
+						if opt.OptionType == layers.TCPOptionKindMSS && len(opt.OptionData) == 2 {
+							mss := binary.BigEndian.Uint16(opt.OptionData)
+							desiredMSS := mss - uint16(dart.HeaderLen()) - 8
+							// 修改MSS值
+							newOptions = append(newOptions, layers.TCPOption{
+								OptionType:   layers.TCPOptionKindMSS,
+								OptionLength: 4,
+								OptionData:   []byte{byte(desiredMSS >> 8), byte(desiredMSS & 0xff)},
+							})
+							logIf(Debug1, "[%s] Modified TCP MSS option from %d to %d\n", pktStyle, mss, desiredMSS)
+						} else {
+							newOptions = append(newOptions, opt)
+						}
+					}
+					tcp.Options = newOptions
+				}
+
 				tcp.SetNetworkLayerForChecksum(ip)
 				err = gopacket.SerializeLayers(buff, opts,
 					ip, tcp, gopacket.Payload(tcp.Payload))
