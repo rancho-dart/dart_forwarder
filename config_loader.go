@@ -53,6 +53,7 @@ type UpLinkInterface struct {
 	Name             string   `yaml:"name"`
 	PublicIPResolver []string `yaml:"public_ip_resolver"`
 	DNSServers       []string `yaml:"dns_servers"`
+	PMTU             uint16   `yaml:"pmtu"`
 	_publicIP        net.IP
 	ipNet            net.IPNet
 	defaultGateway   net.IP // 上联口的默认网关
@@ -376,6 +377,10 @@ func LoadCONFIG(loglevelFormCmdLine *string) error {
 	// Verify configurations of uplink interface
 	CONFIG.Uplink.LinkInterface.Owner = &CONFIG.Uplink
 	CONFIG.Uplink.domainCache = make(map[string]cachedDnsItem)
+
+	if CONFIG.Uplink.PMTU == 0 {
+		CONFIG.Uplink.PMTU = 1500
+	}
 
 	ipNets, err := findIpNetsOfIfce(CONFIG.Uplink.Name)
 	if err != nil {

@@ -143,7 +143,7 @@ func (fr *ForwardRoutine) handleExceededMTU(suggestedMTU uint16, ipOfLongPkt *la
 		return err
 	}
 
-	logIf(Warn, "[Downlink NAT-DART-4] ICMP 'packet too big' sent to sender %s, suggest MTU %d", ipOfLongPkt.SrcIP.String(), suggestedMTU)
+	logIf(Debug1, "[Downlink NAT-DART-4] ICMP packet 'PACKET TOO BIG' is sent to sender %s, suggest MTU %d", ipOfLongPkt.SrcIP.String(), suggestedMTU)
 	return nil
 }
 
@@ -298,8 +298,6 @@ func (fr *ForwardRoutine) encapsulatePacket(packet *netfilter.NFPacket) PostTask
 		SrcFqdn = fmt.Sprintf("%s[%s]", SrcFqdn, SRC_IP_PORT_PLACEHOLDER) // 这里的SrcIPPortPlaceHolder是为了在DART报头中占位，表示源IP和端口的位置
 	}
 
-	// DstFqdn = strings.TrimSuffix(DstFqdn, ".")
-
 	dart := &DART{
 		Version:    1,
 		Protocol:   ip.Protocol,
@@ -307,8 +305,32 @@ func (fr *ForwardRoutine) encapsulatePacket(packet *netfilter.NFPacket) PostTask
 		SrcFqdnLen: uint8(len(SrcFqdn)),
 		DstFqdn:    []byte(DstFqdn),
 		SrcFqdn:    []byte(SrcFqdn),
-		Payload:    ip.Payload,
+		Payload:    nil, // Payload在序列化时由gopacket.Payload补充
 	}
+
+	// 如果是TCP的SYN报文，我们要修改MSS值
+	if ip.Protocol == layers.IPProtocolTCP && len(packet.Packet.Layers()) > 2 {
+		tcpLayer := packet.Packet.Layer(layers.LayerTypeTCP)
+		if tcpLayer != nil {
+			tcp, ok := tcpLayer.(*layers.TCP)
+			if ok {
+				if tcp.SYN {
+					// 修改MSS值
+					desiredMSS := CONFIG.Uplink.PMTU - 20 - 20 - 8 - dart.HeaderLen() // 减去以太网头、IP头、TCP头、DART头和UDP头
+					for i, opt := range tcp.Options {
+						if opt.OptionType == layers.TCPOptionKindMSS && len(opt.OptionData) == 2 {
+							tcp.Options[i].OptionData = []byte{byte(desiredMSS >> 8), byte(desiredMSS & 0xff)}
+							logIf(Debug1, "[Downlink NAT-DART-4] Modified outgoing TCP MSS option to %d\n", desiredMSS)
+							break
+						}
+					}
+					tcp.SetNetworkLayerForChecksum(ip)
+				}
+			}
+		}
+	}
+
+	dart.Payload = ip.Payload
 
 	udp := &layers.UDP{
 		SrcPort: layers.UDPPort(DARTPort),
@@ -524,23 +546,17 @@ func (fr *ForwardRoutine) forwardDartPacket(pktStyle string, ip *layers.IPv4, ud
 				// 检查TCP报文，如果是SYN，我们修改其中的MSS选项，使其应答报文不会太大
 				if tcp.SYN {
 					// 修改MSS选项
-					var newOptions []layers.TCPOption
-					for _, opt := range tcp.Options {
+					for i, opt := range tcp.Options {
 						if opt.OptionType == layers.TCPOptionKindMSS && len(opt.OptionData) == 2 {
-							mss := binary.BigEndian.Uint16(opt.OptionData)
-							desiredMSS := mss - dart.HeaderLen() - 8
+							peerMSS := binary.BigEndian.Uint16(opt.OptionData)              // 对方在发送的时候已经根据其自身的PMTU调整过MSS
+							localMSS := CONFIG.Uplink.PMTU - 20 - 20 - 8 - dart.HeaderLen() // 减去IP头、长度TCP头长度、UDP头长度和DART头长度
+							desiredMSS := min(peerMSS, localMSS)
 							// 修改MSS值
-							newOptions = append(newOptions, layers.TCPOption{
-								OptionType:   layers.TCPOptionKindMSS,
-								OptionLength: 4,
-								OptionData:   []byte{byte(desiredMSS >> 8), byte(desiredMSS & 0xff)},
-							})
-							logIf(Debug1, "[%s] Modified TCP MSS option from %d to %d\n", pktStyle, mss, desiredMSS)
-						} else {
-							newOptions = append(newOptions, opt)
+							tcp.Options[i].OptionData = []byte{byte(desiredMSS >> 8), byte(desiredMSS & 0xff)}
+							logIf(Debug1, "[%s] Modified TCP MSS option from %d to %d\n", pktStyle, localMSS, desiredMSS)
+							break
 						}
 					}
-					tcp.Options = newOptions
 				}
 
 				tcp.SetNetworkLayerForChecksum(ip)
