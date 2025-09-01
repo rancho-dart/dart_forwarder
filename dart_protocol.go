@@ -14,7 +14,7 @@ const (
 	DNSPort         = 53
 	DHCPport        = 67
 	DARTPort        = 0xDA27 // DART 使用的端口号
-	DARTOption		= 0xDA27 // DART 协议在EDNS中的选项值
+	DARTOption      = 0xDA27 // DART 协议在EDNS中的选项值
 )
 
 type DART struct {
@@ -29,8 +29,8 @@ type DART struct {
 }
 
 // 实现 gopacket.Layer 接口
-func (dart *DART) HeaderLen() uint8 {
-	return 4 + dart.DstFqdnLen + dart.SrcFqdnLen
+func (dart *DART) HeaderLen() uint16 {
+	return 4 + uint16(dart.DstFqdnLen) + uint16(dart.SrcFqdnLen)
 }
 
 func (dart *DART) SerializeTo(b gopacket.SerializeBuffer, opts gopacket.SerializeOptions) error {

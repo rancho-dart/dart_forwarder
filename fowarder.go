@@ -110,7 +110,7 @@ func (fr *ForwardRoutine) processDownlink_DartForward() {
 	}
 }
 
-func (fr *ForwardRoutine) handleExceededMTU(suggestedMTU int, ipOfLongPkt *layers.IPv4) error {
+func (fr *ForwardRoutine) handleExceededMTU(suggestedMTU uint16, ipOfLongPkt *layers.IPv4) error {
 	ip := &layers.IPv4{
 		Version:  4,
 		TTL:      64,
@@ -123,7 +123,7 @@ func (fr *ForwardRoutine) handleExceededMTU(suggestedMTU int, ipOfLongPkt *layer
 	icmp := &layers.ICMPv4{
 		TypeCode: layers.ICMPv4TypeDestinationUnreachable<<8 | layers.ICMPv4CodeFragmentationNeeded,
 		Id:       0,
-		Seq:      uint16(suggestedMTU),
+		Seq:      suggestedMTU,
 	}
 
 	icmp_payload := gopacket.Payload(ipOfLongPkt.Contents[:28])
@@ -313,7 +313,7 @@ func (fr *ForwardRoutine) encapsulatePacket(packet *netfilter.NFPacket) PostTask
 	udp := &layers.UDP{
 		SrcPort: layers.UDPPort(DARTPort),
 		DstPort: layers.UDPPort(DstUdpPort),
-		Length:  uint16(len(dart.Payload)) + uint16(dart.HeaderLen()) + 8, // UDP 头长度为 8 字节
+		Length:  uint16(len(dart.Payload)) + dart.HeaderLen() + 8, // UDP 头长度为 8 字节
 	}
 
 	newIp := *ip
@@ -338,7 +338,7 @@ func (fr *ForwardRoutine) encapsulatePacket(packet *netfilter.NFPacket) PostTask
 	packetLen := len(buffer.Bytes())
 
 	if packetLen > MTU {
-		suggestedMTU := MTU - int(dart.HeaderLen()+8) // UDP头长度为8字节
+		suggestedMTU := MTU - dart.HeaderLen() - 8 // UDP头长度为8字节
 		err := fr.handleExceededMTU(suggestedMTU, ip)
 		if err != nil {
 			logIf(Error, "[Downlink NAT-DART-4] Failed to handle exceeded MTU: %v", err)
@@ -528,7 +528,7 @@ func (fr *ForwardRoutine) forwardDartPacket(pktStyle string, ip *layers.IPv4, ud
 					for _, opt := range tcp.Options {
 						if opt.OptionType == layers.TCPOptionKindMSS && len(opt.OptionData) == 2 {
 							mss := binary.BigEndian.Uint16(opt.OptionData)
-							desiredMSS := mss - uint16(dart.HeaderLen()) - 8
+							desiredMSS := mss - dart.HeaderLen() - 8
 							// 修改MSS值
 							newOptions = append(newOptions, layers.TCPOption{
 								OptionType:   layers.TCPOptionKindMSS,
