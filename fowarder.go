@@ -309,7 +309,7 @@ func (fr *ForwardRoutine) encapsulatePacket(packet *netfilter.NFPacket) PostTask
 	}
 
 	// 如果是TCP的SYN报文，我们要修改MSS值
-	if ip.Protocol == layers.IPProtocolTCP && len(packet.Packet.Layers()) > 2 {
+	if ip.Protocol == layers.IPProtocolTCP && len(packet.Packet.Layers()) >= 2 {
 		tcpLayer := packet.Packet.Layer(layers.LayerTypeTCP)
 		if tcpLayer != nil {
 			tcp, ok := tcpLayer.(*layers.TCP)
@@ -325,6 +325,28 @@ func (fr *ForwardRoutine) encapsulatePacket(packet *netfilter.NFPacket) PostTask
 						}
 					}
 					tcp.SetNetworkLayerForChecksum(ip)
+
+					// 序列化 IP+TCP
+					buf := gopacket.NewSerializeBuffer()
+					opts := gopacket.SerializeOptions{
+						FixLengths:       true,
+						ComputeChecksums: true,
+					}
+					if err := gopacket.SerializeLayers(buf, opts, ip, tcp); err != nil {
+						log.Printf("Serialize error: %v", err)
+					}
+
+					// 得到完整 IP 报文
+					fullPacket := buf.Bytes()
+
+					// 重新解析，提取 IP payload
+					parsed := gopacket.NewPacket(fullPacket, layers.LayerTypeIPv4, gopacket.Default)
+					ipLayer := parsed.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
+
+					// 用更新过的 TCP 作为 ip.Payload
+					ip.Payload = ipLayer.Payload
+
+					// Hex_dump(fullPacket)
 				}
 			}
 		}
@@ -351,6 +373,8 @@ func (fr *ForwardRoutine) encapsulatePacket(packet *netfilter.NFPacket) PostTask
 		ComputeChecksums: true,
 	}
 	err := gopacket.SerializeLayers(buffer, opts, &newIp, udp, dart, gopacket.Payload(dart.Payload))
+
+	// Hex_dump(buffer.Bytes())
 
 	if err != nil {
 		logIf(Error, "[Downlink NAT-DART-4] Failed to serialize packet: %v", err)
