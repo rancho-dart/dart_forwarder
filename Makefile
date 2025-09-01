@@ -12,15 +12,20 @@ clean:
 # Install target
 install:
 	@echo "Installing dartd as a system service..."
-	install -Dm755 bin/dartd /usr/local/bin/dartd
-	install -Dm644 scripts/dartd.service /etc/systemd/system/dartd.service
-	install -Dm644 config.yaml /etc/dartd.yaml
-	systemctl stop systemd-resolved
-	systemctl disable systemd-resolved
-	systemctl daemon-reload
-	systemctl enable dartd
-	systemctl start dartd
-	@echo "dartd service has been installed, now you need to edit the config file /etc/dartd.yaml to let it start successfully."
+	@if [ -f /etc/systemd/system/dartd.service ]; then \
+		echo "dartd is already installed. Performing upgrade instead..."; \
+		$(MAKE) upgrade; \
+	else \
+		install -Dm755 bin/dartd /usr/local/bin/dartd; \
+		install -Dm644 scripts/dartd.service /etc/systemd/system/dartd.service; \
+		install -Dm644 config.yaml /etc/dartd.yaml; \
+		systemctl stop systemd-resolved; \
+		systemctl disable systemd-resolved; \
+		systemctl daemon-reload; \
+		systemctl enable dartd; \
+		systemctl start dartd; \
+		echo "dartd service has been installed, now you need to edit the config file /etc/dartd.yaml to let it start successfully."; \
+	fi
 
 # Uninstall target
 uninstall:
