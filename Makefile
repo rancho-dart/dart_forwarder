@@ -2,6 +2,7 @@
 build:
 	@echo "Building the project..."
 	go build -o bin/dartd .
+	strip bin/dartd
 
 # Clean up compiled files
 clean:
