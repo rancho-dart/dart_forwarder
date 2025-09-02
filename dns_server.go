@@ -252,8 +252,10 @@ func (s *DNSServer) respondAsDomainAgent(Qtype uint16, queriedDomain string, out
 		} else {
 			s.respondWithSOA(w, r, queriedDomain, false)
 		}
-	default:
+	case dns.TypeAAAA:
 		s.respondWithNxdomain(w, r)
+	default:
+		s.respondWithNotImplemented(w, r) // 其他类型的查询不支持
 	}
 }
 
