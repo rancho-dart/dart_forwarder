@@ -252,6 +252,8 @@ func (s *DNSServer) respondAsDomainAgent(Qtype uint16, queriedDomain string, out
 		} else {
 			s.respondWithSOA(w, r, queriedDomain, false)
 		}
+	default:
+		s.respondWithNxdomain(w, r)
 	}
 }
 
