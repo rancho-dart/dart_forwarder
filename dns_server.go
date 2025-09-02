@@ -254,9 +254,20 @@ func (s *DNSServer) respondAsDomainAgent(Qtype uint16, queriedDomain string, out
 		}
 	case dns.TypeAAAA:
 		s.respondWithNxdomain(w, r)
+	case dns.TypeCAA:
+		s.respondWithNull(w, r) // 直接返回空响应
 	default:
 		s.respondWithNotImplemented(w, r) // 其他类型的查询不支持
 	}
+}
+
+func (s *DNSServer) respondWithNull(w dns.ResponseWriter, r *dns.Msg) {
+	m := new(dns.Msg)
+	m.SetReply(r)
+	m.Authoritative = true
+	m.Rcode = dns.RcodeSuccess
+	writeMsgWithDebug(w, m)
+	logIf(Debug2, "Respond With Null: %s", r.Question[0].Name)
 }
 
 func (s *DNSServer) querierSupportDart(ifceName string, querierIP net.IP, r *dns.Msg) bool {
@@ -517,7 +528,7 @@ func (s *DNSServer) respondWithPtr(w dns.ResponseWriter, r *dns.Msg, queriedReve
 		Ptr: dns.Fqdn(hostname), // e.g. "example.com."
 	})
 	writeMsgWithDebug(w, m)
-	logIf(Debug1, "respondWithPtr: %s -> %s", queriedReverseName, hostname)
+	logIf(Debug1, "Respond With Ptr: %s -> %s", queriedReverseName, hostname)
 }
 
 func (s *DNSServer) respondWithCName(w dns.ResponseWriter, r *dns.Msg, queriedDomain string, domain string) {
@@ -532,7 +543,7 @@ func (s *DNSServer) respondWithCName(w dns.ResponseWriter, r *dns.Msg, queriedDo
 	m.Answer = append(m.Answer, cname)
 
 	writeMsgWithDebug(w, m)
-	logIf(Debug1, "respondWithCName: %s -> %s", queriedDomain, domain)
+	logIf(Debug1, "Respond With CName: %s -> %s", queriedDomain, domain)
 }
 
 func (s *DNSServer) respondWithNS(w dns.ResponseWriter, r *dns.Msg, domain string, ip net.IP, nsQueried bool) {
@@ -570,7 +581,7 @@ func (s *DNSServer) respondWithNS(w dns.ResponseWriter, r *dns.Msg, domain strin
 	m.Extra = append(m.Extra, glue)
 
 	writeMsgWithDebug(w, m)
-	logIf(Debug1, "respondWithNS: %s -> %s", domain, ip.String())
+	logIf(Debug1, "Respond With NS: %s -> %s", domain, ip.String())
 }
 
 func (s *DNSServer) respondWithSOA(w dns.ResponseWriter, r *dns.Msg, authorityDomain string, isAnswer bool) {
@@ -603,7 +614,7 @@ func (s *DNSServer) respondWithSOA(w dns.ResponseWriter, r *dns.Msg, authorityDo
 	}
 
 	writeMsgWithDebug(w, m)
-	logIf(Debug2, "respondWithSOA: %s", authorityDomain)
+	logIf(Debug2, "Respond With SOA: %s", authorityDomain)
 }
 
 func (s *DNSServer) respondWithNotImplemented(w dns.ResponseWriter, r *dns.Msg) {
@@ -707,7 +718,7 @@ func (s *DNSServer) respondWithPseudoIp(w dns.ResponseWriter, r *dns.Msg, domain
 
 	writeMsgWithDebug(w, m)
 
-	logIf(Debug1, "respondWithPseudoIp: %s -> %s", domain, pseudoIp.String())
+	logIf(Debug1, "Respond With PseudoIp: %s -> %s", domain, pseudoIp.String())
 }
 
 func (s *DNSServer) respondWithARecord(w dns.ResponseWriter, r *dns.Msg, domain string, IP net.IP) {
@@ -722,7 +733,7 @@ func (s *DNSServer) respondWithARecord(w dns.ResponseWriter, r *dns.Msg, domain 
 	m.Answer = append(m.Answer, a)
 
 	writeMsgWithDebug(w, m)
-	logIf(Debug1, "respondWithARecord: %s -> %s", domain, IP.String())
+	logIf(Debug1, "Respond With ARecord: %s -> %s", domain, IP.String())
 }
 
 func (s *DNSServer) respondWithDartGateway(w dns.ResponseWriter, r *dns.Msg, domain string, gwdomain string, gwIP net.IP, withCName bool) {
@@ -750,7 +761,7 @@ func (s *DNSServer) respondWithDartGateway(w dns.ResponseWriter, r *dns.Msg, dom
 	m.Answer = append(m.Answer, a)
 
 	writeMsgWithDebug(w, m)
-	logIf(Debug1, "respondWithDartGateway: %s -> %s", domain, gwIP.String())
+	logIf(Debug1, "Respond With DartGateway: %s -> %s", domain, gwIP.String())
 }
 
 // respondWithRefusal 以“拒绝服务”进行响应
@@ -759,7 +770,7 @@ func (s *DNSServer) respondWithRefusal(w dns.ResponseWriter, r *dns.Msg) {
 	m.SetReply(r)
 	m.Rcode = dns.RcodeRefused
 	writeMsgWithDebug(w, m)
-	logIf(Debug2, "respondWithRefusal: %s", r.Question[0].Name)
+	logIf(Debug2, "Respond With Refusal: %s", r.Question[0].Name)
 }
 
 func (s *DNSServer) respondWithNxdomain(w dns.ResponseWriter, r *dns.Msg) {
@@ -768,7 +779,7 @@ func (s *DNSServer) respondWithNxdomain(w dns.ResponseWriter, r *dns.Msg) {
 	m.Authoritative = true
 	m.Rcode = dns.RcodeNameError
 	writeMsgWithDebug(w, m)
-	logIf(Debug2, "respondWithNxdomain: %s", r.Question[0].Name)
+	logIf(Debug2, "Respond With Nxdomain: %s", r.Question[0].Name)
 }
 
 func (s *DNSServer) respondWithServerFailure(w dns.ResponseWriter, r *dns.Msg) {
@@ -776,7 +787,7 @@ func (s *DNSServer) respondWithServerFailure(w dns.ResponseWriter, r *dns.Msg) {
 	m.SetReply(r)
 	m.Rcode = dns.RcodeServerFailure
 	writeMsgWithDebug(w, m)
-	logIf(Error, "respondWithServerFailure: %s", r.Question[0].Name)
+	logIf(Error, "Respond With ServerFailure: %s", r.Question[0].Name)
 }
 
 func (s *DNSServer) getDhcpLeaseByFqdn(ifName, fqdn string) *leaseInfo {
@@ -857,7 +868,7 @@ func (s *DNSServer) respondWithDartStyle(w dns.ResponseWriter, dnsMsg *dns.Msg, 
 	m.Answer = append(m.Answer, a)
 
 	writeMsgWithDebug(w, m)
-	logIf(Debug1, "respondWithLeasedIP: %s -> %s", domain, ip.String())
+	logIf(Debug1, "Respond With LeasedIP: %s -> %s", domain, ip.String())
 }
 
 // startDNSServerModule 启动 DNS Server 模块
