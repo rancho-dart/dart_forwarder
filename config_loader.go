@@ -469,7 +469,7 @@ func LoadCONFIG(loglevelFormCmdLine *string) error {
 			logIf(Info, "The uplink interface of this device is connected to DART domain: [%s]", DartDomain)
 
 			if !dl.RegistedInUplinkDNS {
-				log.Fatalf("Please delegate domain %s to this host in uplink dns before starting dart gateway daemon in this host. Exit.", dl.Domain)
+				log.Fatalf("Please delegate domain '%s' to this host in uplink dns first.", dl.Domain)
 			}
 		}
 
