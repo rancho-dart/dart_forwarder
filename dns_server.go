@@ -14,6 +14,7 @@ const (
 	DART_GATEWAY_PREFIX = "dart-gateway."
 	DART_HOST_PREFIX    = "dart-host."
 	NAME_SERVER_PREFIX  = "ns."
+	DEFAULT_TTL         = 3600 // 默认的DNS记录TTL
 )
 
 // DNSServer 结构体，用于管理 DNS 服务
@@ -523,7 +524,7 @@ func (s *DNSServer) respondWithPtr(w dns.ResponseWriter, r *dns.Msg, queriedReve
 			Name:   queriedReverseName, // e.g. "25.2.0.192.in-addr.arpa."
 			Rrtype: dns.TypePTR,
 			Class:  dns.ClassINET,
-			Ttl:    60,
+			Ttl:    DEFAULT_TTL,
 		},
 		Ptr: dns.Fqdn(hostname), // e.g. "example.com."
 	})
@@ -537,7 +538,7 @@ func (s *DNSServer) respondWithCName(w dns.ResponseWriter, r *dns.Msg, queriedDo
 	m.Authoritative = true
 
 	cname := &dns.CNAME{
-		Hdr:    dns.RR_Header{Name: queriedDomain, Rrtype: dns.TypeCNAME, Class: dns.ClassINET, Ttl: 60},
+		Hdr:    dns.RR_Header{Name: queriedDomain, Rrtype: dns.TypeCNAME, Class: dns.ClassINET, Ttl: DEFAULT_TTL},
 		Target: domain,
 	}
 	m.Answer = append(m.Answer, cname)
@@ -594,15 +595,15 @@ func (s *DNSServer) respondWithSOA(w dns.ResponseWriter, r *dns.Msg, authorityDo
 			Name:   authorityDomain,
 			Rrtype: dns.TypeSOA,
 			Class:  dns.ClassINET,
-			Ttl:    3600,
+			Ttl:    DEFAULT_TTL,
 		},
 		Ns:      "ns." + authorityDomain,
 		Mbox:    "admin." + authorityDomain,
 		Serial:  1,
 		Refresh: 86400,
 		Retry:   7200,
-		Expire:  3600,
-		Minttl:  3600,
+		Expire:  DEFAULT_TTL,
+		Minttl:  DEFAULT_TTL,
 	}
 
 	if isAnswer {
@@ -701,7 +702,7 @@ func (s *DNSServer) respondWithPseudoIp(w dns.ResponseWriter, r *dns.Msg, domain
 			Name:   domain,
 			Rrtype: dns.TypeCNAME,
 			Class:  dns.ClassINET,
-			Ttl:    60,
+			Ttl:    DEFAULT_TTL,
 		},
 		Target: AName,
 	})
@@ -711,7 +712,7 @@ func (s *DNSServer) respondWithPseudoIp(w dns.ResponseWriter, r *dns.Msg, domain
 			Name:   AName,
 			Rrtype: dns.TypeA,
 			Class:  dns.ClassINET,
-			Ttl:    60,
+			Ttl:    DEFAULT_TTL,
 		},
 		A: pseudoIp,
 	})
@@ -727,7 +728,7 @@ func (s *DNSServer) respondWithARecord(w dns.ResponseWriter, r *dns.Msg, domain 
 	m.Authoritative = true
 
 	a := &dns.A{
-		Hdr: dns.RR_Header{Name: domain, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
+		Hdr: dns.RR_Header{Name: domain, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: DEFAULT_TTL},
 		A:   IP,
 	}
 	m.Answer = append(m.Answer, a)
@@ -746,7 +747,7 @@ func (s *DNSServer) respondWithDartGateway(w dns.ResponseWriter, r *dns.Msg, dom
 	if withCName {
 		AName = DART_GATEWAY_PREFIX + gwdomain
 		cname := &dns.CNAME{
-			Hdr:    dns.RR_Header{Name: domain, Rrtype: dns.TypeCNAME, Class: dns.ClassINET, Ttl: 60},
+			Hdr:    dns.RR_Header{Name: domain, Rrtype: dns.TypeCNAME, Class: dns.ClassINET, Ttl: DEFAULT_TTL},
 			Target: AName,
 		}
 		m.Answer = append(m.Answer, cname)
@@ -755,7 +756,7 @@ func (s *DNSServer) respondWithDartGateway(w dns.ResponseWriter, r *dns.Msg, dom
 	}
 
 	a := &dns.A{
-		Hdr: dns.RR_Header{Name: AName, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
+		Hdr: dns.RR_Header{Name: AName, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: DEFAULT_TTL},
 		A:   gwIP,
 	}
 	m.Answer = append(m.Answer, a)
@@ -856,13 +857,13 @@ func (s *DNSServer) respondWithDartStyle(w dns.ResponseWriter, dnsMsg *dns.Msg, 
 	// supports DART protocol, then dart-host.c1.sh.cn is resolved to the IP address of the host
 
 	cname := &dns.CNAME{
-		Hdr:    dns.RR_Header{Name: domain, Rrtype: dns.TypeCNAME, Class: dns.ClassINET, Ttl: 60},
+		Hdr:    dns.RR_Header{Name: domain, Rrtype: dns.TypeCNAME, Class: dns.ClassINET, Ttl: DEFAULT_TTL},
 		Target: cnameTarget, // dart-host.c1.sh.cn or dart-gateway.c1.sh.cn
 	}
 	m.Answer = append(m.Answer, cname)
 
 	a := &dns.A{
-		Hdr: dns.RR_Header{Name: cname.Target, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
+		Hdr: dns.RR_Header{Name: cname.Target, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: DEFAULT_TTL},
 		A:   ip,
 	}
 	m.Answer = append(m.Answer, a)
