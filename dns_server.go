@@ -14,7 +14,7 @@ const (
 	DART_GATEWAY_PREFIX = "dart-gateway."
 	DART_HOST_PREFIX    = "dart-host."
 	NAME_SERVER_PREFIX  = "ns."
-	DEFAULT_TTL         = 3600 // 默认的DNS记录TTL
+	DEFAULT_TTL         = 600 // 默认的DNS记录TTL
 )
 
 // DNSServer 结构体，用于管理 DNS 服务
@@ -28,9 +28,6 @@ var dnsClient = &dns.Client{
 }
 
 func writeMsgWithDebug(w dns.ResponseWriter, m *dns.Msg) {
-	// if !strings.Contains(m.Question[0].Name, "ubuntu") {
-	// 	logIf("debug1", "===== DNS response: %s", m.String())
-	// }
 	err := w.WriteMsg(m)
 	if err != nil {
 		logIf(Error, "failed to write response:", err)
@@ -43,9 +40,6 @@ func resolveByQuery(domain, dnsServer string, depth int) (addrs []net.IP, suppor
 	}
 
 	// 每次递归调用创建独立的 dns.Client 实例  // ChatGPT说递归调用中反复使用同一个 dns.Client 实例是安全的，不会产生资源冲突
-	// c := &dns.Client{
-	//     Timeout: 3 * time.Second,
-	// }
 
 	m := new(dns.Msg)
 	m.SetQuestion(dns.Fqdn(domain), dns.TypeA)
@@ -595,15 +589,15 @@ func (s *DNSServer) respondWithSOA(w dns.ResponseWriter, r *dns.Msg, authorityDo
 			Name:   authorityDomain,
 			Rrtype: dns.TypeSOA,
 			Class:  dns.ClassINET,
-			Ttl:    DEFAULT_TTL,
+			Ttl:    3600,
 		},
 		Ns:      "ns." + authorityDomain,
 		Mbox:    "admin." + authorityDomain,
 		Serial:  1,
 		Refresh: 86400,
 		Retry:   7200,
-		Expire:  DEFAULT_TTL,
-		Minttl:  DEFAULT_TTL,
+		Expire:  3600,
+		Minttl:  3600,
 	}
 
 	if isAnswer {
