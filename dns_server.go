@@ -14,6 +14,7 @@ const (
 	DART_GATEWAY_PREFIX = "dart-gateway."
 	DART_HOST_PREFIX    = "dart-host."
 	NAME_SERVER_PREFIX  = "ns."
+	DEFAULT_TTL         = 600 // 默认的DNS记录TTL
 )
 
 // DNSServer 结构体，用于管理 DNS 服务
@@ -27,9 +28,6 @@ var dnsClient = &dns.Client{
 }
 
 func writeMsgWithDebug(w dns.ResponseWriter, m *dns.Msg) {
-	// if !strings.Contains(m.Question[0].Name, "ubuntu") {
-	// 	logIf("debug1", "===== DNS response: %s", m.String())
-	// }
 	err := w.WriteMsg(m)
 	if err != nil {
 		logIf(Error, "failed to write response:", err)
@@ -42,9 +40,6 @@ func resolveByQuery(domain, dnsServer string, depth int) (addrs []net.IP, suppor
 	}
 
 	// 每次递归调用创建独立的 dns.Client 实例  // ChatGPT说递归调用中反复使用同一个 dns.Client 实例是安全的，不会产生资源冲突
-	// c := &dns.Client{
-	//     Timeout: 3 * time.Second,
-	// }
 
 	m := new(dns.Msg)
 	m.SetQuestion(dns.Fqdn(domain), dns.TypeA)
@@ -523,7 +518,7 @@ func (s *DNSServer) respondWithPtr(w dns.ResponseWriter, r *dns.Msg, queriedReve
 			Name:   queriedReverseName, // e.g. "25.2.0.192.in-addr.arpa."
 			Rrtype: dns.TypePTR,
 			Class:  dns.ClassINET,
-			Ttl:    60,
+			Ttl:    DEFAULT_TTL,
 		},
 		Ptr: dns.Fqdn(hostname), // e.g. "example.com."
 	})
@@ -537,7 +532,7 @@ func (s *DNSServer) respondWithCName(w dns.ResponseWriter, r *dns.Msg, queriedDo
 	m.Authoritative = true
 
 	cname := &dns.CNAME{
-		Hdr:    dns.RR_Header{Name: queriedDomain, Rrtype: dns.TypeCNAME, Class: dns.ClassINET, Ttl: 60},
+		Hdr:    dns.RR_Header{Name: queriedDomain, Rrtype: dns.TypeCNAME, Class: dns.ClassINET, Ttl: DEFAULT_TTL},
 		Target: domain,
 	}
 	m.Answer = append(m.Answer, cname)
@@ -701,7 +696,7 @@ func (s *DNSServer) respondWithPseudoIp(w dns.ResponseWriter, r *dns.Msg, domain
 			Name:   domain,
 			Rrtype: dns.TypeCNAME,
 			Class:  dns.ClassINET,
-			Ttl:    60,
+			Ttl:    DEFAULT_TTL,
 		},
 		Target: AName,
 	})
@@ -711,7 +706,7 @@ func (s *DNSServer) respondWithPseudoIp(w dns.ResponseWriter, r *dns.Msg, domain
 			Name:   AName,
 			Rrtype: dns.TypeA,
 			Class:  dns.ClassINET,
-			Ttl:    60,
+			Ttl:    DEFAULT_TTL,
 		},
 		A: pseudoIp,
 	})
@@ -727,7 +722,7 @@ func (s *DNSServer) respondWithARecord(w dns.ResponseWriter, r *dns.Msg, domain 
 	m.Authoritative = true
 
 	a := &dns.A{
-		Hdr: dns.RR_Header{Name: domain, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
+		Hdr: dns.RR_Header{Name: domain, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: DEFAULT_TTL},
 		A:   IP,
 	}
 	m.Answer = append(m.Answer, a)
@@ -746,7 +741,7 @@ func (s *DNSServer) respondWithDartGateway(w dns.ResponseWriter, r *dns.Msg, dom
 	if withCName {
 		AName = DART_GATEWAY_PREFIX + gwdomain
 		cname := &dns.CNAME{
-			Hdr:    dns.RR_Header{Name: domain, Rrtype: dns.TypeCNAME, Class: dns.ClassINET, Ttl: 60},
+			Hdr:    dns.RR_Header{Name: domain, Rrtype: dns.TypeCNAME, Class: dns.ClassINET, Ttl: DEFAULT_TTL},
 			Target: AName,
 		}
 		m.Answer = append(m.Answer, cname)
@@ -755,7 +750,7 @@ func (s *DNSServer) respondWithDartGateway(w dns.ResponseWriter, r *dns.Msg, dom
 	}
 
 	a := &dns.A{
-		Hdr: dns.RR_Header{Name: AName, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
+		Hdr: dns.RR_Header{Name: AName, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: DEFAULT_TTL},
 		A:   gwIP,
 	}
 	m.Answer = append(m.Answer, a)
@@ -856,13 +851,13 @@ func (s *DNSServer) respondWithDartStyle(w dns.ResponseWriter, dnsMsg *dns.Msg, 
 	// supports DART protocol, then dart-host.c1.sh.cn is resolved to the IP address of the host
 
 	cname := &dns.CNAME{
-		Hdr:    dns.RR_Header{Name: domain, Rrtype: dns.TypeCNAME, Class: dns.ClassINET, Ttl: 60},
+		Hdr:    dns.RR_Header{Name: domain, Rrtype: dns.TypeCNAME, Class: dns.ClassINET, Ttl: DEFAULT_TTL},
 		Target: cnameTarget, // dart-host.c1.sh.cn or dart-gateway.c1.sh.cn
 	}
 	m.Answer = append(m.Answer, cname)
 
 	a := &dns.A{
-		Hdr: dns.RR_Header{Name: cname.Target, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
+		Hdr: dns.RR_Header{Name: cname.Target, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: DEFAULT_TTL},
 		A:   ip,
 	}
 	m.Answer = append(m.Answer, a)

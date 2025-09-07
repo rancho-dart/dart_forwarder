@@ -469,7 +469,7 @@ func LoadCONFIG(loglevelFormCmdLine *string) error {
 			logIf(Info, "The uplink interface of this device is connected to DART domain: [%s]", DartDomain)
 
 			if !dl.RegistedInUplinkDNS {
-				log.Fatalf("Sub-DART-domain not allowed in undelegated DART domain. Exit.")
+				log.Fatalf("Please delegate domain '%s' to this host in uplink dns first.", dl.Domain)
 			}
 		}
 
@@ -521,11 +521,9 @@ func LoadCONFIG(loglevelFormCmdLine *string) error {
 				}
 			}
 
-			// 如果没有找到合适的IP，则清空地址池，标记为不启动DHCP SERVER
+			// 如果没有找到合适的IP，则报配置错误
 			if !foundValidIP {
-				dl.AddressPool = ""
-				dl.PoolHeadIP = nil
-				dl.PoolTailIP = nil
+				return fmt.Errorf("no valid IP address found in interface [%s] for address_pool [%s]", dl.Name, dl.AddressPool)
 			}
 		} else { // 没有配置地址池
 			if len(ipNets) > 0 {
