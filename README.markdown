@@ -44,7 +44,12 @@ Currently, the program is only tested on Ubuntu 24.04.
    sudo make install
    ```
    During installation, the program will be installed as system service 'dartd', and the configuration file will be installed as /etc/dartd.yaml.
+
    The service is set to start automatically after installation, but maybe can not start automatically at the first time, because the default configuration file is not suitable for your environment.
+
+   You MUST modify the configuration file and restart the service to make it work. See CONFIGURATION.md for more details.
+
+   While dartd runs as service, its output will be redirected to /var/log/dartd.log.
 
 5. Configure the system:
    - dartd uses nfqueue to capture packets, it depends on the following settings:
@@ -70,14 +75,14 @@ Currently, the program is only tested on Ubuntu 24.04.
    Edit /etc/dartd.yaml, complete the configuration.
    Then run the program to check whether the configuration is correct or not:
    ```bash
-   bin/dartd 
+   sudo bin/dartd 
    ```
    The program will run in the foreground and print logs to the console.
    You can use -h to see the help message, -loglevel to set the log level(-loglevel=debug2 to print the most detailed info), Ctrl+C to stop the program.
    
       Any time the service can not start sucessfully, you can run it by hand:
       ```bash
-      bin/dartd -loglevel=debug2
+      sudo bin/dartd -loglevel debug2
       ```
       to find the accuracy error message.
 

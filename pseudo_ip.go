@@ -1,3 +1,6 @@
+// Copyright (c) 2025 rancho.dart@qq.com
+// Licensed under the MIT License. See LICENSE file for details.
+
 package main
 
 // 当一台不支持DART协议的主机查询位于其他域的主机域名时，按照DART协议的规则，返回DART网关的IP地址。这样，下一步它发送报文时会被发送到Dart网关
