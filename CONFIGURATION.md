@@ -1,4 +1,6 @@
 # Configuration of Dart Forwarder
+Dart Forwarder is the core service program of the DART Gateway. In addition to the forwarding function, it also has a built-in DHCP server and a DNS server.
+
 Dart Forwarder is configured through a YAML file. The configuration file is located at /etc/dartd.yaml.
 ## Typical configuration
 ```yaml
@@ -6,7 +8,7 @@ log_level: info
 uplink:
   name: eth0
   pmtu: 1492
-  public_ip_resolver: # 用于查找我的公网ip（如果在NAT后面）
+  public_ip_resolver:
     - http://ifconfig.me
     - http://ip.sb
     - http://ident.me  
@@ -36,6 +38,7 @@ downlinks:
     - info (default)
     - debug1
     - debug2
+    
     You can override the log level by specifying the log level in the command line:
     ```bash
     sudo bin/dartd -loglevel debug2
@@ -70,7 +73,7 @@ downlinks:
     ```
     curl <url>
     ```
-    and the returned value is a valid IP address, the url is a valid resolver.
+    and the returned value is your public IP address, the url is a valid resolver.
 
   - dns_servers: 
     
