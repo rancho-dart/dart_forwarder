@@ -14,7 +14,7 @@ const (
 	DART_GATEWAY_PREFIX = "dart-gateway."
 	DART_HOST_PREFIX    = "dart-host."
 	NAME_SERVER_PREFIX  = "ns."
-	DEFAULT_TTL         = 600 // 默认的DNS记录TTL
+	DEFAULT_TTL         = 60 // 默认的DNS记录TTL
 )
 
 // DNSServer 结构体，用于管理 DNS 服务
