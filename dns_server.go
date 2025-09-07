@@ -619,7 +619,7 @@ func (s *DNSServer) respondWithSOA(w dns.ResponseWriter, r *dns.Msg, authorityDo
 
 func (s *DNSServer) respondWithNotImplemented(w dns.ResponseWriter, r *dns.Msg) {
 	dns.HandleFailed(w, r)
-	logIf(Error, "DNS query not implemented: %s", r.Question[0].Name)
+	logIf(Error, "DNS query not implemented: %s, Qtype: %d", r.Question[0].Name, r.Question[0].Qtype)
 }
 
 func (s *DNSServer) getInboundInfo(w dns.ResponseWriter) (clientIP net.IP, inboundIfce *LinkInterface) {
