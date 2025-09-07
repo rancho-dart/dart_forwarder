@@ -26,6 +26,7 @@ downlinks:
       - mac: "00:0c:29:f1:65:17"
         ip: "10.11.1.99"
         fqdn: "dart.bj.cn"
+        dart_version: 0
         delegated: true
 ```
 ## Configuration Parameters
@@ -45,7 +46,9 @@ downlinks:
     ```
     When running as a system service, the log level is determined by the log_level parameter in the configuration file. And the output will be redirected to /var/log/dartd.log.
 
-- uplink: Required. The uplink interface.
+- uplink: 
+
+    Required. The uplink interface.
 
     The DART protocol uses DNS as its control plane and inherits DNS’s hierarchical tree structure in its architecture. Each DART gateway connects to its parent domain via an uplink and derives one or more subdomains through downlink connections.
 
@@ -89,7 +92,7 @@ downlinks:
 
     - name: 
     
-        Required. The name of the downlink interface. If is same as the uplink interface, the system will work in router-on-a-stick mode.
+        Required. The name of the downlink interface. If is same as the uplink interface, the system will work in router-on-a-stick mode. In this case, please delete the address_pool line to disable the embedded DHCP server.
     - address_pool: 
     
         The address pool used to assign IP addresses to clients. The embeded DHCP server will use this pool to assign IP addresses to clients. Make sure the pool is at the same subnet as the downlink interface.
@@ -128,3 +131,16 @@ downlinks:
         - delegated: 
         
             Whether the client is delegated. If set to true, this client is treated as a dart gateway to its subdomain.
+
+After configuring the program, you can run it by hand:
+```bash
+sudo bin/dartd -loglevel debug2
+```
+to check whether the configuration is correct or not. 
+
+If it runs successfully (e.g. it doesn't exit with a fatal message), you can press Ctrl+C to break the program and run the program as a system service:
+```bash
+sudo systemctl start dartd
+```
+
+Now you can turn to DEBUG.md to see how to debug the program.
