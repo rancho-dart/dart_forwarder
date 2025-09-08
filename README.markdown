@@ -26,7 +26,7 @@ Currently, the program is only tested on Ubuntu 24.04.
 
 2. Install dependencies:
    ```bash
-   export GOPROXY=https://goproxy.cn,direct  # Change to your preferred proxy.
+   export GOPROXY=https://goproxy.cn,direct  # Change to your preferred proxy. You can add this line to your .bashrc 
    go mod tidy
    sudo apt update
    sudo apt install libnetfilter-queue-dev
@@ -82,7 +82,7 @@ Currently, the program is only tested on Ubuntu 24.04.
                dhcp4: true
                routes:
                - to: 198.18.0.0/15 # The pseduo ip pool used by DART gateway
-                  via: 192.168.1.1 # Change to your DART gateway ip
+                 via: 192.168.1.1 # Change to your DART gateway ip
 
          ```
          Apply the configuration:
