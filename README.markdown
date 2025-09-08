@@ -60,16 +60,40 @@ Currently, the program is only tested on Ubuntu 24.04.
          ```
       2) The system has a default route. Otherwise some packets will be dropped instead of being forwarded.
 
-   - If system is configured as Router-on-stick, you should edit /etc/sysctl.conf to disable ICMP redirect:
-      ```bash
-      net.ipv4.conf.all.accept_redirects=0
-      net.ipv4.conf.all.send_redirects=0
-      net.ipv4.conf.eth0.send_redirects=0       # Change 'eth0' to your network interface name.
-      ```
-   - Make it to take effect:
-      ```bash
-      sudo sysctl -p
-      ```
+   - If system is configured as Router-on-a-stick, you should：
+      - edit /etc/sysctl.conf to disable ICMP redirect:
+         ```bash
+         net.ipv4.conf.all.accept_redirects=0
+         net.ipv4.conf.all.send_redirects=0
+         net.ipv4.conf.eth0.send_redirects=0       # Change 'eth0' to your network interface name.
+         ```
+      - Make it to take effect:
+         ```bash
+         sudo sysctl -p
+         ```
+      - Add a permenent route to forward pseduo ip addresses to DART gateway
+         
+         find the network interface name in /etc/netplan/01-netcfg.yaml:
+         ```yaml
+         network:
+         version: 2
+         ethernets:
+            eth0: # Suppose it is the network interface name
+               dhcp4: true
+               routes:
+               - to: 198.18.0.0/15 # The pseduo ip pool used by DART gateway
+                  via: 192.168.1.1 # Change to your DART gateway ip
+
+         ```
+         Apply the configuration:
+         ```bash
+         sudo netplan apply
+         ```
+         Verify the route:
+         ```bash
+         ip route show
+         ```
+
 
 6. Configure the program:
    Edit /etc/dartd.yaml, complete the configuration.
