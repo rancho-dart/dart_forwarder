@@ -92,12 +92,30 @@ To debug Dart Forwarder, you should have finished the installation and configura
 1. Prepare the clients
 
     DART is a very powerful protocol. A IPv4-only device can be supported very well by NAT-DART-4 (which means, the device knows nothing about DART). In fact, the client really needs nothing special to do to support DART. But to ensure the DART gateway to recognize the client correctly, you need to ensure that the client meets the following conditions:
-    - If the client gets its IP address via DHCP, you need to make sure that it gets the its IP address from the embeded DHCP server of the DART gateway.
+    - If the client gets its IP address via DHCP, you need to make sure that it gets the its IP address from the embeded DHCP server of the DART gateway. This is to let the DART gateway to know the client is online.  
+        In Windows, you can use the command:
+        ```bash
+        ifconfig /renew
+        ```
+        In Ubuntu 24.04 which uses netplan, you can use the command:
+        ```bash
+        nmcli device connect eth0  # Change eth0 to your network interface
+        ```
+        As to other OSes, you need to find out the command by yourself :-)
     - If the client gets its IP address via static configuration, you need to make sure that its mac/ip/fqdn have been configured in the static_bindings parameter of the DART gateway's configuration file.
     - Make sure that there are no duplicate hostnames in each subdomain.
 
     Now you can try to access the client inside the subdomain from the parent domain with a DART-ready client, such as a Windows 10/11 PC with DartWinDivert installed, or a PC (Windows 10/11 or Linux) behind another DART gateway.
 
+    We've deployed a demo DART domain on Internet:  
+    [https://dart-proto.cn](https://dart-proto.cn)  
+    You can try to access the demo DART domain from the prepared clients above. Just open the above URL in the browser.
+
+    Note: Microsoft Edge (on windows) and Chrome (on Ubuntu 24.04) can open above URLs successfully, but Firefox cannot. It seems that Firefox does not send packets the pseduo addresses I choose. Simply ignore this problem currently.
+
     You can use tcpdump or WireShark to capture the packets between the DART gateway and the client. There is a DART protocol plugin 'dart.lua' in the wireshark folder of this repo, simply copy it to the wireshark plugins folder and restart wireshark. Then WireShark will show DART packets.
+
+    If you have any comments or suggestions, please leave them in the discussions on GitHub:  
+    [Disscussion about DART Forwarder](https://github.com/rancho-dart/dart_forwarder/discussions)
 
 Enjoy DART!
